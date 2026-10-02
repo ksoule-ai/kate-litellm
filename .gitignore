@@ -1,0 +1,12 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Database dumps
+backups/
+
+# macOS / editors
+.DS_Store
+.vscode/
+.idea/
