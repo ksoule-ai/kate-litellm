@@ -67,3 +67,13 @@ general_settings:
   # Daily spend aggregates are stored separately and are not affected.
   maximum_spend_logs_retention_period: "7d"
   maximum_spend_logs_retention_interval: "1d"
+  # Routes LiteLLM has no native support for, forwarded as is to the provider.
+  pass_through_endpoints:
+    # OpenRouter's System One API (TypeSafe Jev request/response shapes); the
+    # chat routes reject these models. POST /v1/systemone with model "jev-1.13".
+    - path: "/v1/systemone"
+      target: "https://openrouter.ai/api/v1/systemone"
+      headers:
+        Authorization: "Bearer os.environ/OPENROUTER_API_KEY"
+        content-type: application/json
+      auth: true   # require a LiteLLM key, like every other route
