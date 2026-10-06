@@ -1,4 +1,4 @@
-.PHONY: init up down restart logs ps pull test cache backup psql
+.PHONY: init up down restart logs ps pull test cache prompt backup psql
 
 init:      ## Create .env with generated secrets
 	./scripts/init-env.sh
@@ -26,6 +26,13 @@ test:      ## Health check; pass MODEL=provider/model to also send a request
 
 cache:     ## Cached vs uncached prompt tokens per model per day
 	docker compose exec -T db psql -U litellm litellm < scripts/cache-report.sql
+
+prompt:    ## Final prompt the model saw for a logged request: make prompt ID=<request id>
+	@docker compose exec -T db psql -U litellm litellm -Atc \
+		"select proxy_server_request from \"LiteLLM_SpendLogs\" where request_id = '$(ID)'" \
+	| docker compose run --rm --no-deps -T --entrypoint python \
+		-v ./scripts/render-prompt.py:/render-prompt.py:ro -v ./config:/cfg:ro -v ./.cache/chat-templates:/cache \
+		litellm /render-prompt.py
 
 backup:    ## Dump the database to backups/
 	mkdir -p backups

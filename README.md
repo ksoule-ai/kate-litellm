@@ -47,6 +47,17 @@ deleted after 7 days. Each log row keeps the provider's full usage block, so cac
 and uncached prompt tokens are tracked per request. `make cache` prints them per
 model per day.
 
+The log viewer's Pretty tab has a "Final prompt" section showing what the model
+saw after its chat template ran, including anything the template added (default
+system prompt, documents, tools). `make prompt ID=<request id>` prints the same
+thing. The template is rendered locally by the `prompt` service;
+`config/chat-templates.yaml` says where each model's template comes from.
+
+That section, and the documents and system messages shown in the Pretty tab, come
+from `scripts/patch-ui.py`, which edits LiteLLM's bundled UI when the gateway
+starts. If a new LiteLLM image no longer matches, `make logs` shows a `patch-ui:
+WARNING` line and the stock UI is used.
+
 ## Day to day
 
 | Command | What it does |
@@ -55,12 +66,14 @@ model per day.
 | `make restart` | Apply changes to `config/litellm.yaml` or `.env` |
 | `make logs` | Follow gateway logs |
 | `make cache` | Cached vs uncached token report |
+| `make prompt ID=…` | Final prompt the model saw for a logged request |
 | `make backup` | Dump the database to `backups/` |
 | `make psql` | Open a SQL shell on the database |
 
 ## Layout
 
-- `docker-compose.yml`: gateway + Postgres, bound to `127.0.0.1`
+- `docker-compose.yml`: gateway, prompt renderer and Postgres, bound to `127.0.0.1`
 - `config/litellm.yaml`: providers, models, logging settings
+- `config/chat-templates.yaml`: where each model's chat template comes from
 - `.env.example`: every variable the stack reads
-- `scripts/`: `.env` bootstrap, smoke test, cache report query
+- `scripts/`: `.env` bootstrap, smoke test, cache report query, UI patch, prompt renderer

@@ -6,6 +6,9 @@
 # Database dumps
 backups/
 
+# Downloaded chat templates
+.cache/
+
 # macOS / editors
 .DS_Store
 .vscode/

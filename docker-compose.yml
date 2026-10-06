@@ -4,6 +4,8 @@ services:
   litellm:
     image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-stable}
     restart: unless-stopped
+    # Patch the bundled admin UI's log viewer, then start the stock entrypoint.
+    entrypoint: ["sh", "-c", "python /app/patch-ui.py; exec docker/prod_entrypoint.sh \"$$@\"", "--"]
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     ports:
       # Loopback only: the gateway is not reachable from the LAN.
@@ -14,12 +16,30 @@ services:
       STORE_MODEL_IN_DB: "True"
     volumes:
       - ./config/litellm.yaml:/app/config.yaml:ro
+      - ./scripts/patch-ui.py:/app/patch-ui.py:ro
     extra_hosts:
       # Lets the container reach model servers running on the Mac itself.
       - "host.docker.internal:host-gateway"
     depends_on:
       db:
         condition: service_healthy
+
+  # Renders a logged request through its model's chat template for the log
+  # viewer's "Final prompt" section. Same image as the gateway: it only needs
+  # the Python and Jinja that LiteLLM already ships.
+  prompt:
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-stable}
+    restart: unless-stopped
+    entrypoint: ["python", "/render-prompt.py", "--serve"]
+    ports:
+      - "127.0.0.1:${PROMPT_PORT:-4001}:4001"
+    environment:
+      # Only needed to download templates from gated or private repos.
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - ./scripts/render-prompt.py:/render-prompt.py:ro
+      - ./config:/cfg:ro
+      - ./.cache/chat-templates:/cache
 
   db:
     image: postgres:16

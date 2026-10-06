@@ -1,0 +1,17 @@
+# Where to find each model's chat template, for `make prompt ID=<request id>`,
+# which rebuilds the final prompt a model saw from a logged request.
+#
+# Keys are the model names clients call (shell-style wildcards allowed; first
+# match wins). Values are either a Hugging Face repo id, whose chat template and
+# special tokens are downloaded once into .cache/chat-templates/, or a path to
+# a local .jinja file (relative to this folder) for a template you maintain.
+#
+# Models not listed fall back to the last two parts of their name as the repo
+# id, e.g. openrouter/ibm-granite/granite-4.0-h-micro -> ibm-granite/granite-4.0-h-micro.
+# A hosted provider may not use exactly the template in the model's repo, so
+# for those the result is a best guess; for your own endpoints it is exact as
+# long as the endpoint was not started with a custom template.
+
+templates:
+  hf/ibm-granite/granite-switch-4.1-3b-preview: ibm-granite/granite-switch-4.1-3b-preview
+  hf/ibm-granite/granite-4.1-8b: ibm-granite/granite-4.1-8b
