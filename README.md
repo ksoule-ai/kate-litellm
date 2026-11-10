@@ -73,6 +73,22 @@ kl sessions        # every tracked session
 kl session <id>    # one session: its commits and its gateway requests
 ```
 
+To go back to a commit and carry on from there with a new agent:
+
+```sh
+kl resume <commit>              # same harness as made the commit; add e.g. --model for pi
+kl resume --print <commit>      # only show the handoff note
+kl resume --harness hermes <commit>
+```
+
+This leaves your checkout alone. It adds a worktree next to the repo
+(`<repo>-kl/<commit>-1`, branch `kl/resume-<commit>-1`), writes a handoff note to
+`.kl/HANDOFF.md` in it, and starts the agent there in tmux with an opening message
+telling it to read the note. The note is a summary, written by the `kl-summarizer`
+model in `config/litellm.yaml`, of the conversation the first agent had had when it
+made the commit; `kl` copies that conversation out of the request log at commit time,
+so it outlasts the log's 7 days. Remove a worktree with `git worktree remove`.
+
 Each `kl run` gets its own virtual key (named `kl-<harness>-<id>` in the UI, deleted
 when the harness exits), so its requests can be told apart in the logs whatever the
 harness sends. Commits get a `Kl-Session:` trailer and a row in

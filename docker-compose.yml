@@ -14,6 +14,10 @@ services:
     environment:
       DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD}@db:5432/litellm
       STORE_MODEL_IN_DB: "True"
+      # LiteLLM cuts each logged message to 2048 characters by default. kl copies
+      # agent conversations out of the log (kl/kl), so keep them whole. Rows are
+      # larger; the 7-day retention in config/litellm.yaml bounds the total.
+      MAX_STRING_LENGTH_PROMPT_IN_DB: "100000"
     volumes:
       - ./config/litellm.yaml:/app/config.yaml:ro
       - ./scripts/patch-ui.py:/app/patch-ui.py:ro

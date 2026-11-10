@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# End-to-end test of `kl run`, the hooks and the ledger, against a stand-in for
-# the gateway's key endpoints. Needs git and python3; touches nothing
+# End-to-end test of `kl run`, the hooks, the ledger and `kl resume`, against
+# stand-ins for the gateway's key and chat endpoints and its request log. Needs git and python3; touches nothing
 # outside a temp folder. Run: make kl-test
 set -euo pipefail
 
@@ -25,7 +25,11 @@ class H(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         with open(T + "/gateway.log", "a") as f:
             f.write(json.dumps({"path": self.path, "auth": self.headers["Authorization"], "body": body}) + "\n")
-        out = json.dumps({"key": "sk-session-" + body.get("key_alias", "")}).encode()
+        out = {"key": "sk-session-" + body.get("key_alias", "")}
+        if self.path == "/v1/chat/completions":  # the summariser
+            out = {"choices": [{"message": {"role": "assistant", "content": "## Goal\nSTAND-IN NOTE for a transcript with "
+                   + str(body["messages"][0]["content"].count("USER:")) + " user message(s)"}}]}
+        out = json.dumps(out).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
         self.wfile.write(out)
     def log_message(self, *a): pass
@@ -36,6 +40,20 @@ EOF
 GW=$!
 for _ in $(seq 50); do [[ -s "$T/port" ]] && break; sleep 0.1; done
 export KL_GATEWAY_URL="http://127.0.0.1:$(cat "$T/port")"
+
+# Stand-in request log: whatever is asked, the session made one request before
+# the commit (with tools, so it is the conversation) and one after it.
+cat > "$T/psql" <<'PSQL'
+#!/bin/sh
+for a; do sql="$a"; done
+case "$sql" in
+  *'"startTime" >'*) echo '{"request_id": "req-after", "start_time": "2030-01-01T00:00:00", "model": "m", "request": {}, "response": {}}' ;;
+  *row_to_json*) echo '{"request_id": "req-before", "start_time": "2020-01-01T00:00:00", "model": "m", "request": {"model": "m", "tools": [{}], "messages": [{"role": "system", "content": "harness prompt"}, {"role": "user", "content": "build the thing"}]}, "response": {"choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [{"function": {"name": "bash", "arguments": "git commit"}}]}}]}}' ;;
+  *) echo "(stand-in)" ;;
+esac
+PSQL
+chmod +x "$T/psql"
+export KL_PSQL="$T/psql"
 
 pass=0
 ok()   { pass=$((pass + 1)); echo "ok   $1"; }
@@ -108,6 +126,30 @@ check "hooks uninstall restores the repo"     '! git config --local --get core.h
 check "gateway down: clear error, nothing run" '! KL_GATEWAY_URL=http://127.0.0.1:1 "$KL" run sh -c "touch $T/ran" 2>"$T/err" && grep -q "make up" "$T/err" && [[ ! -e "$T/ran" ]]'
 check "exit code of the harness is returned"  '"$KL" run sh -c "exit 7" 2>/dev/null; [[ $? -eq 7 ]]'
 
+
+# Snapshots and resume. FIRST is a commit from the first session; later commits exist after it.
+cd "$T/repo" && git checkout -q main
+FIRST="$(sql "select sha from commits where session_id=\"$SID\" and subject=\"first in session\"")"
+HEAD_BEFORE="$(git rev-parse HEAD)"
+check "snapshot copies the conversation"      '"$KL" snapshot "$(sql "select repo from commits limit 1")" "$FIRST" && [[ "$(sql "select request_id || \" \" || complete from snapshots where sha=\"$FIRST\"")" == "req-before 1" ]]'
+"$KL" resume --print "$FIRST" > "$T/handoff" 2>/dev/null
+check "handoff carries the summary"           'grep -q "STAND-IN NOTE for a transcript with 1 user message" "$T/handoff"'
+check "handoff lists commits up to that one"  'grep -q "first in session" "$T/handoff" && ! grep -q "second in session" "$T/handoff"'
+check "summary is kept, not written twice"    '"$KL" resume --print "$FIRST" >/dev/null 2>&1; [[ "$(grep -c /v1/chat/completions "$T/gateway.log")" == 1 ]]'
+check "--print creates nothing"               '[[ ! -e "$T/repo-kl" ]]'
+"$KL" resume --no-start "$FIRST" 2>/dev/null
+W="$T/repo-kl/${FIRST:0:8}-1"
+check "worktree is at the commit, new branch" '[[ "$(git -C "$W" rev-parse HEAD)" == "$FIRST" && "$(git -C "$W" branch --show-current)" == "kl/resume-${FIRST:0:8}-1" ]]'
+check "handoff is in the worktree, ignored"   '[[ -s "$W/.kl/HANDOFF.md" && -z "$(git -C "$W" status --porcelain)" ]]'
+check "original checkout is untouched"        '[[ "$(git rev-parse HEAD)" == "$HEAD_BEFORE" && "$(git branch --show-current)" == main ]]'
+"$KL" resume --fg --harness sh "$FIRST" -c 'echo "$KL_SESSION_ID" > "'"$T"'/sid4"; echo r > r; git add r; git commit -qm "resumed work"' 2>/dev/null
+SID4="$(cat "$T/sid4")"; W2="$T/repo-kl/${FIRST:0:8}-2"
+check "second resume gets its own worktree"   '[[ "$(git -C "$W2" log -1 --format=%s)" == "resumed work" && "$(git -C "$W2" rev-parse HEAD~1)" == "$FIRST" ]]'
+check "resumed session links to its origin"   '[[ "$(sql "select parent_session || \" \" || parent_commit from sessions where id=\"$SID4\"")" == "$SID $FIRST" ]]'
+check "resumed commit is attributed"          '[[ "$(sql "select session_id from commits where subject=\"resumed work\"")" == "$SID4" ]]'
+check "untracked commit: says so, still works" '"$KL" resume --print "$(git rev-list --max-parents=0 HEAD)" 2>/dev/null | grep -q "No conversation was recorded"'
+check "options after the commit reach kl"     '"$KL" resume "$FIRST" --no-start 2>/dev/null && [[ -d "$T/repo-kl/${FIRST:0:8}-3" ]]'
+check "unknown commit: clear error"           '! "$KL" resume --print nosuchcommit 2>"$T/err" && grep -q "is not a commit" "$T/err"'
 
 # A launcher that is stopped still cleans up; one that is killed is cleaned up by the next run.
 "$KL" run sleep 30 2>/dev/null & P=$!

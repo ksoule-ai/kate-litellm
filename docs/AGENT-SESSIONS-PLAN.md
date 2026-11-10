@@ -140,11 +140,29 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
      it is killed outright, the next `kl run` does that for it.
    - Commits replayed by a rebase keep the session that wrote them. A new commit made
      in the middle of a rebase is not recorded.
-2. **Resume.** Next. Snapshots, summariser, `kl resume <sha>`. Everything works from
-   the CLI at this point. Needs Postgres reachable from the host. A commit's time
-   has one-second precision and the request that made it starts within the same
-   second, so the snapshot must use the ledger's `recorded_at` (milliseconds), not
-   the commit time.
+2. **Resume.** Built and tested: per-commit snapshots, the summariser and
+   `kl resume <commit>`. Run end to end against the real gateway with Pi and Hermes,
+   including resuming a Pi commit with Hermes; the summariser was a stand-in, so the
+   quality of real summaries is untested. `make kl-test` covers it without a gateway.
+   How it turned out:
+   - **Snapshot.** The post-commit hook starts a background process that waits for
+     the gateway's log to catch up (it is a few seconds behind), then copies the
+     session's last request with tools that started before the commit, plus the reply
+     to it. Session end and `kl resume` retry if that did not happen.
+   - **The gateway was cutting every logged message to 2,048 characters.** That would
+     have gutted the snapshots. `MAX_STRING_LENGTH_PROMPT_IN_DB` is now 100,000 in
+     `docker-compose.yml`. Log rows are larger as a result.
+   - **Database access** goes through `docker compose exec db psql`, so Postgres still
+     has no host port. `KL_PSQL` overrides the command.
+   - **Summary.** Written by the gateway alias `kl-summarizer`, cached in the ledger.
+     Tool output is clipped before summarising, and a long transcript is summarised
+     piece by piece (`KL_SUMMARY_CHUNK_CHARS`), each piece rewriting the note so far.
+   - **Starting the agent.** Pi takes the opening message as an argument. Hermes has
+     no such option in 0.19, so kl types it into the tmux window once the screen
+     settles. If the agent fails to start, the window stays open with the error.
+   - Snapshot selection compares the gateway's clock with the host's. They are the
+     same clock under Docker on Linux; a container VM on a Mac can drift after sleep,
+     which could pick the request one turn early or late.
 3. **Daemon and manager agent.** Chat API with the read tools, then the resume tool.
 4. **UI tab.** Chat page, the patch, confirm dialog for resume.
 5. **Hardening.** Retention, upgrade check, backup of the ledger with `make backup`.
