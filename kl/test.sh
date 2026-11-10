@@ -26,7 +26,24 @@ class H(BaseHTTPRequestHandler):
         with open(T + "/gateway.log", "a") as f:
             f.write(json.dumps({"path": self.path, "auth": self.headers["Authorization"], "body": body}) + "\n")
         out = {"key": "sk-session-" + body.get("key_alias", "")}
-        if self.path == "/v1/chat/completions":  # the summariser
+        if body.get("model") == "kl-manager":  # a scripted model for the manager agent: one tool call, then an answer
+            last = body["messages"][-1]
+            words = (last.get("content") or "").split(" ", 1)
+            call = {"sessions": ("list_sessions", {}),
+                    "commit:": ("get_commit", {"commit": words[-1]}),
+                    "git:": ("git", {"repo": "repo", "command": words[-1]}),
+                    "read:": ("read_file", {"repo": "repo", "path": words[-1]}),
+                    "sql:": ("query_logs", {"sql": words[-1]}),
+                    "resume": ("resume_from_commit", dict(zip(("repo", "commit", "harness"), words[-1].split())))}.get(words[0])
+            msg = {"role": "assistant", "content": "ANSWER: " + (last.get("content") or "")}
+            if last["role"] == "user" and words[0] == "textcall":  # a small model writing the call as text
+                msg["content"] = 'I will look. {"name": "list_repos", "arguments": {}}'
+            elif last["role"] == "user" and call:
+                assert {t["function"]["name"] for t in body["tools"]} >= {call[0]}
+                msg = {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function",
+                       "function": {"name": call[0], "arguments": json.dumps(call[1])}}]}
+            out = {"choices": [{"message": msg}]}
+        elif self.path == "/v1/chat/completions":  # the summariser
             out = {"choices": [{"message": {"role": "assistant", "content": "## Goal\nSTAND-IN NOTE for a transcript with "
                    + str(body["messages"][0]["content"].count("USER:")) + " user message(s)"}}]}
         out = json.dumps(out).encode()
@@ -53,7 +70,7 @@ case "$sql" in
 esac
 PSQL
 chmod +x "$T/psql"
-export KL_PSQL="$T/psql"
+export KL_PSQL="$T/psql" KL_PSQL_READER="$T/psql"
 
 pass=0
 ok()   { pass=$((pass + 1)); echo "ok   $1"; }
@@ -150,6 +167,50 @@ check "resumed commit is attributed"          '[[ "$(sql "select session_id from
 check "untracked commit: says so, still works" '"$KL" resume --print "$(git rev-list --max-parents=0 HEAD)" 2>/dev/null | grep -q "No conversation was recorded"'
 check "options after the commit reach kl"     '"$KL" resume "$FIRST" --no-start 2>/dev/null && [[ -d "$T/repo-kl/${FIRST:0:8}-3" ]]'
 check "unknown commit: clear error"           '! "$KL" resume --print nosuchcommit 2>"$T/err" && grep -q "is not a commit" "$T/err"'
+
+# The manager agent, against a scripted model. Each question makes one tool call.
+chat() { "$KL" chat "$@" 2>&1 </dev/null; }
+check "manager lists sessions with a tool"     'chat sessions | grep -q "ANSWER: session=${SID4:0:8}; state=ended; harness=sh"'
+check "manager key is its own, kept private"   'grep -q "\"key_alias\": \"kl-manager\"" "$T/gateway.log" && [[ "$(stat -c %a "$KL_HOME/manager.key" 2>/dev/null || stat -f %Lp "$KL_HOME/manager.key")" == 600 ]]'
+check "tool call written as text still works"  'chat textcall | grep -q "ANSWER: repo=repo; sessions="'
+check "get_commit: session, request, files"   'chat -v "commit: ${FIRST:0:8}" > "$T/gc"; grep -q "made by: session ${SID:0:8} (harness sh)" "$T/gc" && grep -q "the person said: build the thing" "$T/gc" && grep -q " b | 1 +" "$T/gc"'
+check "a commit id is accepted for a session" 'chat "sessions" >/dev/null; python3 -c "
+import sys, types; sys.argv=[\"kl\"]; core=types.ModuleType(\"core\"); core.__file__=\"$KL\"; exec(open(\"$KL\").read().split(\"if __name__\")[0], core.__dict__); core.__file__=\"$KL\"
+sys.path.insert(0, \"$(dirname "$KL")\"); import manager
+assert manager.Tools(core).session(\"${FIRST:0:8}\")[\"id\"] == \"$SID\""'
+check "git tool reads"                         'chat "git: log -1 --format=%s main" | grep -q "after the session"'
+check "git tool refuses to write a file"       'chat "git: diff --output=$T/leak HEAD~1" | grep -q "not allowed" && [[ ! -e "$T/leak" ]]'
+check "git tool refuses other commands"        'chat "git: push origin main" | grep -q "allowed git commands"'
+check "git tool refuses branch changes"        'chat "git: branch -D side" | grep -q "branch can only list" && git rev-parse -q --verify side >/dev/null'
+check "read_file reads inside the repo"        'chat "read: a" | grep -q "ANSWER: 1: a"'
+check "read_file refuses paths outside it"     'chat "read: ../home/ledger.sqlite" | grep -q "outside the repository"'
+check "query tool runs a SELECT"               'chat "sql: select request_id from requests" | grep -q "req-before"'
+check "query tool refuses anything else"       'chat "sql: delete from requests" | grep -q "only a single SELECT" && chat "sql: select 1; drop table x" | grep -q "only a single SELECT"'
+N="$(ls "$T/repo-kl" | wc -l)"
+check "resume without a yes does nothing"      'chat "resume repo $FIRST true" | grep -q "The person declined" && [[ "$(ls "$T/repo-kl" | wc -l)" == "$N" ]]'
+check "resume shows what will happen"          'chat "resume repo $FIRST true" | grep -q "at commit ${FIRST:0:10} (\"first in session\")"'
+check "resume with a yes starts a session"     'chat --yes "resume repo $FIRST true" | grep -q "kl: worktree" && [[ "$(ls "$T/repo-kl" | wc -l)" == "$((N + 1))" ]]'
+check "resume of an unknown commit: no prompt" '! chat --yes "resume repo deadbeef true" | grep -q "Go ahead"'
+
+# The local API: token, Host and Origin are all checked.
+PORT=$((20000 + RANDOM % 20000))
+"$KL" serve --port $PORT 2>"$T/serve.err" & SERVE=$!
+trap 'kill $GW $SERVE 2>/dev/null || true; rm -rf "$T"' EXIT
+for _ in $(seq 50); do grep -q token= "$T/serve.err" 2>/dev/null && break; sleep 0.1; done
+TOKEN="$(cat "$KL_HOME/daemon.token")"; U="http://127.0.0.1:$PORT"
+api() { curl -s --noproxy '*' -m 20 "$@"; }
+check "API: no token, no access"               '[[ "$(api -o /dev/null -w "%{http_code}" $U/api/health)" == 401 ]]'
+check "API: wrong token, no access"            '[[ "$(api -o /dev/null -w "%{http_code}" -H "Authorization: Bearer nope" $U/api/health)" == 401 ]]'
+check "API: token gives access"                'api -H "Authorization: Bearer $TOKEN" $U/api/health | grep -q "\"ok\": true"'
+check "API: other Host is refused"             '[[ "$(api -o /dev/null -w "%{http_code}" -H "Host: evil.example" -H "Authorization: Bearer $TOKEN" $U/api/health)" == 403 ]]'
+check "API: other Origin cannot post"          '[[ "$(api -o /dev/null -w "%{http_code}" -H "Origin: http://evil.example" -H "Authorization: Bearer $TOKEN" -d "{}" $U/api/chat)" == 403 ]]'
+check "API: sign-in link sets a strict cookie" 'api -D - -o /dev/null "$U/?token=$TOKEN" | grep -qi "set-cookie: kl_token=.*HttpOnly; SameSite=Strict"'
+check "API: cookie gives access"               'api -H "Cookie: kl_token=$TOKEN" $U/api/health | grep -q "\"ok\": true"'
+check "API: chat streams the steps"            'api -H "Authorization: Bearer $TOKEN" -d "{\"message\": \"sessions\"}" $U/api/chat > "$T/chat.out" && grep -q "\"type\": \"tool\", \"name\": \"list_sessions\"" "$T/chat.out" && grep -q "\"type\": \"text\"" "$T/chat.out" && tail -1 "$T/chat.out" | grep -q "\"waiting_for_confirmation\": false"'
+api -H "Authorization: Bearer $TOKEN" -d "{\"conversation\": \"c1\", \"message\": \"resume repo $FIRST true\"}" $U/api/chat > "$T/chat.out"
+check "API: resume waits for confirmation"     'grep -q "\"type\": \"confirm\"" "$T/chat.out" && tail -1 "$T/chat.out" | grep -q "\"waiting_for_confirmation\": true" && [[ "$(ls "$T/repo-kl" | wc -l)" == "$((N + 1))" ]]'
+check "API: declining does nothing"            'api -H "Authorization: Bearer $TOKEN" -d "{\"conversation\": \"c1\", \"approve\": false}" $U/api/confirm | grep -q "The person declined" && [[ "$(ls "$T/repo-kl" | wc -l)" == "$((N + 1))" ]]'
+kill $SERVE 2>/dev/null || true
 
 # A launcher that is stopped still cleans up; one that is killed is cleaned up by the next run.
 "$KL" run sleep 30 2>/dev/null & P=$!

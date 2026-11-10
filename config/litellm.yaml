@@ -61,6 +61,15 @@ model_list:
       model: openrouter/anthropic/claude-sonnet-4.5
       api_key: os.environ/OPENROUTER_API_KEY
 
+  # The manager agent you talk to with `kl chat` and in the UI tab. It reads
+  # your logs and repos, so it runs locally on Ollama. Set KL_MANAGER_MODEL in
+  # .env to a model you have pulled that supports tools (`ollama show <name>`
+  # lists "tools" under Capabilities).
+  - model_name: kl-manager
+    litellm_params:
+      model: os.environ/KL_MANAGER_MODEL
+      api_base: http://host.docker.internal:11434
+
 litellm_settings:
   # Silently drop request params a given provider doesn't support, so one
   # client can talk to every provider.

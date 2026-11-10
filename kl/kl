@@ -7,6 +7,9 @@
   kl session <id>              one session: its commits and its gateway requests
   kl resume <commit>           new worktree at a past commit, with a new agent that
                                is given a summary of the conversation up to it
+  kl chat [question]           talk to the manager agent about sessions, commits and
+                               logs; it can also start a resume for you
+  kl serve                     the manager agent as a local API, for the UI tab
   kl setup <harness>           print the one-time config a harness needs
   kl hooks install|uninstall   keep the hooks on a repo outside `kl run` too
 
@@ -809,6 +812,23 @@ def cmd_session(args: argparse.Namespace) -> int:
     return 0
 
 
+def manager():
+    """kl/manager.py, which uses this script's functions as `core`."""
+    sys.path.insert(0, KL_DIR)
+    import manager as m  # noqa: PLC0415
+    return m, sys.modules[__name__]
+
+
+def cmd_chat(args: argparse.Namespace) -> int:
+    m, core = manager()
+    return m.cmd_chat(core, args)
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    m, core = manager()
+    return m.cmd_serve(core, args)
+
+
 def cmd_setup(args: argparse.Namespace) -> int:
     print(SETUP[args.harness] % {"base_url": gateway_url() + "/v1"}, end="")
     return 0
@@ -858,6 +878,16 @@ def main() -> int:
     p.add_argument("sha")
     p.set_defaults(fn=cmd_snapshot)
 
+    p = sub.add_parser("chat", help="talk to the manager agent")
+    p.add_argument("-v", "--verbose", action="store_true", help="show all of what each tool returned, not the first lines")
+    p.add_argument("--yes", action="store_true", help="with a question on the command line: allow a resume without asking")
+    p.add_argument("message", nargs="*", help="ask one question and exit; leave out for a conversation")
+    p.set_defaults(fn=cmd_chat)
+
+    p = sub.add_parser("serve", help="run the manager agent as a local API")
+    p.add_argument("--port", type=int, default=int(os.environ.get("KL_PORT", "4002")))
+    p.set_defaults(fn=cmd_serve)
+
     p = sub.add_parser("setup", help="print the one-time config a harness needs")
     p.add_argument("harness", choices=sorted(SETUP))
     p.set_defaults(fn=cmd_setup)
@@ -875,4 +905,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        code = main()
+        sys.stdout.flush()
+    except BrokenPipeError:  # output piped into something that stopped reading, e.g. `kl log | head`
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        code = 0
+    sys.exit(code)

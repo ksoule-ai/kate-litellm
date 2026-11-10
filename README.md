@@ -89,6 +89,24 @@ model in `config/litellm.yaml`, of the conversation the first agent had had when
 made the commit; `kl` copies that conversation out of the request log at commit time,
 so it outlasts the log's 7 days. Remove a worktree with `git worktree remove`.
 
+To ask about any of this in plain language, talk to the manager agent:
+
+```sh
+kl chat                                   # a conversation
+kl chat "which session made the last commit in my-repo, and what was it asked to do?"
+```
+
+It can list sessions and commits, read the conversation behind a commit, query the
+request log with SQL, read your repos with git, and start a `kl resume` for you. It
+runs on a local Ollama model: set `KL_MANAGER_MODEL` in `.env` to one you have pulled
+that supports tools, then `make restart`. Everything it can do is read-only except
+starting a resume, which always asks you first. It shows what each tool returned
+under its answers: check a small model's answers against that, because small models
+misreport. In testing, a 3B model invented details and a 7B model did not; use 7B or
+larger. `kl serve` offers the same agent as a local API for the UI tab, which is
+not built yet. Repos it knows are the ones `kl` has run in, plus git repos directly
+inside any folder listed in `KL_REPO_ROOTS`.
+
 Each `kl run` gets its own virtual key (named `kl-<harness>-<id>` in the UI, deleted
 when the harness exits), so its requests can be told apart in the logs whatever the
 harness sends. Commits get a `Kl-Session:` trailer and a row in
@@ -116,5 +134,5 @@ Design and status: [docs/AGENT-SESSIONS-PLAN.md](docs/AGENT-SESSIONS-PLAN.md).
 - `config/litellm.yaml`: providers, models, logging settings
 - `config/chat-templates.yaml`: where each model's chat template comes from
 - `.env.example`: every variable the stack reads
-- `kl/`: agent session launcher, git hooks and their test (`make kl-test`)
+- `kl/`: agent session launcher, git hooks, manager agent and their test (`make kl-test`)
 - `scripts/`: `.env` bootstrap, smoke test, cache report query, UI patch, prompt renderer

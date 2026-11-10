@@ -163,7 +163,37 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
    - Snapshot selection compares the gateway's clock with the host's. They are the
      same clock under Docker on Linux; a container VM on a Mac can drift after sleep,
      which could pick the request one turn early or late.
-3. **Daemon and manager agent.** Chat API with the read tools, then the resume tool.
+3. **Daemon and manager agent.** Built and tested: `kl chat` (terminal) and
+   `kl serve` (local API), both in `kl/manager.py`. Run against real Ollama with
+   Qwen 2.5 at 3B and 7B (4-bit), through the gateway alias `kl-manager`.
+   `make kl-test` covers the tools, the confirmation step and the API's access checks
+   with a scripted model. How it turned out:
+   - **Tools:** `list_repos`, `list_sessions`, `get_session`, `list_commits`,
+     `get_commit`, `get_conversation`, `query_logs`, `git`, `read_file`, and
+     `resume_from_commit`. All read-only except the last.
+   - **Resume always asks.** What the person is shown is worked out from the tool's
+     arguments, not from the model's words. One request per message: in testing the
+     3B model called it five times unprompted on an unrelated question, and each was
+     stopped at the prompt.
+   - **`query_logs`** runs as a database login (`kl_reader`, created on first use)
+     that can read the request log table and nothing else, read-only, 10 s limit. The
+     manager has its own gateway key and its requests are left out of what it reads.
+   - **`git`** is an allowlist of reading commands with the options that write files
+     or run programs refused. **`read_file`** cannot leave the repo.
+   - **The API** listens on loopback and checks a token (header or a strict cookie),
+     the Host header and, for anything that changes state, the Origin.
+   - **No FastAPI or uv.** Everything is still the Python standard library, so there
+     is nothing to install. Postgres still has no host port.
+   - **Model size matters more than the plan assumed.** Both sizes picked the right
+     tool almost every time. The 3B model then misreported what the tools returned
+     (invented file names, wrong counts). The 7B model reported correctly on the same
+     questions once the tools were made forgiving: ids of sessions and commits look
+     alike, so tools accept either; `get_commit` answers the commonest question in one
+     call; an identical repeated call is refused; lists carry their own totals.
+     `kl chat` prints what each tool returned so answers can be checked. A 7B model
+     is the floor; larger ones were not tried.
+   - Summaries by the 3B model were thin (it missed the person's request). The
+     summariser alias still points at a hosted model.
 4. **UI tab.** Chat page, the patch, confirm dialog for resume.
 5. **Hardening.** Retention, upgrade check, backup of the ledger with `make backup`.
 
@@ -222,7 +252,10 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
    `.env` and UI patch.
 2. **How to reach the resumed agent.** tmux, with the UI showing the attach command. A
    web terminal in the tab can come later.
-3. **Manager model.** A hosted model for the MVP, a local model in the final version.
+3. **Manager model.** Local on Ollama from the start (changed from "hosted for the
+   MVP"): set `KL_MANAGER_MODEL` in `.env`. The summariser is still hosted. The
+   original reasoning follows.
+   A hosted model for the MVP, a local model in the final version.
    To keep that swap a config change:
    - The daemon calls two gateway aliases, `kl-manager` and `kl-summarizer`, defined in
      `config/litellm.yaml`. Moving to a local model means repointing the aliases (for
