@@ -108,4 +108,18 @@ check "hooks uninstall restores the repo"     '! git config --local --get core.h
 check "gateway down: clear error, nothing run" '! KL_GATEWAY_URL=http://127.0.0.1:1 "$KL" run sh -c "touch $T/ran" 2>"$T/err" && grep -q "make up" "$T/err" && [[ ! -e "$T/ran" ]]'
 check "exit code of the harness is returned"  '"$KL" run sh -c "exit 7" 2>/dev/null; [[ $? -eq 7 ]]'
 
+
+# A launcher that is stopped still cleans up; one that is killed is cleaned up by the next run.
+"$KL" run sleep 30 2>/dev/null & P=$!
+for _ in $(seq 50); do [[ -n "$(sql "select id from sessions where ended_at is null")" ]] && break; sleep 0.1; done
+A="$(sql "select key_alias from sessions where ended_at is null")"
+kill -TERM $P; wait $P || true
+check "SIGTERM: session closed, key deleted"   '[[ -z "$(sql "select id from sessions where ended_at is null")" ]] && grep -q "/key/delete.*sk-session-$A" "$T/gateway.log"'
+"$KL" run sleep 30 2>/dev/null & P=$!
+for _ in $(seq 50); do [[ -n "$(sql "select id from sessions where ended_at is null")" ]] && break; sleep 0.1; done
+A="$(sql "select key_alias from sessions where ended_at is null")"
+kill -KILL $P; wait $P 2>/dev/null || true; pkill -f "sleep 30" || true
+"$KL" run true 2>/dev/null
+check "killed launcher: next run deletes its key" '[[ -z "$(sql "select id from sessions where ended_at is null")" ]] && grep -q "/key/delete.*key_aliases.*$A" "$T/gateway.log"'
+
 echo "$pass checks passed"

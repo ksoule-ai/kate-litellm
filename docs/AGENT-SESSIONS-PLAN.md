@@ -104,13 +104,29 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
 
 ## Phases
 
-0. **Spikes.** To do, on the Mac. Run Pi and Hermes against the gateway by hand.
-   Record which headers each sends, whether tool calling works with the intended
-   models, and whether their shell tools pass the environment through to git hooks.
-1. **Attribution.** Built: `kl run`, key per session, hooks, ledger, `kl log`,
-   `kl sessions`, `kl session`. Tested with `make kl-test` against a stand-in for the
-   gateway's key endpoints and a shell in place of a harness; not yet run against the
-   real gateway, Pi or Hermes. Differences from the design above:
+0. **Spikes.** Done in a cloud sandbox against the real gateway image and database,
+   with Pi 1.5.2 and Hermes 0.19.0. The model was a scripted stand-in that asks the
+   harness to run one shell command (a `git commit`), so real model behaviour and
+   interactive use are still untested. Findings:
+   - **Pi** sends no session header of its own. With the `headers` entry from
+     `kl setup pi` it sends `x-litellm-session-id`, and the gateway's `session_id`
+     column then equals the kl session id.
+   - **Hermes** sends no session header and has no setting for one. The gateway
+     gives every request its own `session_id`, so the virtual key is the only link.
+   - **Hermes 0.19.0 ignores `OPENAI_BASE_URL`** with `--provider custom` and calls
+     OpenRouter. The endpoint and key go in its `config.yaml`; `kl setup hermes`
+     prints the three commands. The docs describe flags (`--base-url`) that this
+     release does not have.
+   - Both harnesses pass their environment to shell commands, so the hooks see the
+     session without extra setup. (Hermes's docs describe filtering in newer
+     versions; `kl setup hermes` covers that case.)
+   - Log rows, with full request bodies, survive deletion of the session's key.
+   - The gateway writes log rows a few seconds after the request, and a row's
+     primary key is the upstream response id.
+1. **Attribution.** Built and tested: `kl run`, key per session, hooks, ledger,
+   `kl log`, `kl sessions`, `kl session`. `make kl-test` covers the launcher, hooks
+   and ledger without a gateway; the spike runs above covered the real gateway, Pi
+   and Hermes end to end. Differences from the design above:
    - The hooks write to `~/.kl/ledger.sqlite` directly. There is no daemon yet, so no
      spool file is needed; the daemon will read the same file.
    - The hooks are not set in the repo's config. `kl run` points git at them through
@@ -120,10 +136,15 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
      the hooks then find the session by repo if exactly one is running there.
    - The session's key is deleted when the harness exits. The ledger keeps its hash,
      which is what the request logs are keyed on.
+   - If the launcher is stopped, it closes the session and deletes the key first. If
+     it is killed outright, the next `kl run` does that for it.
    - Commits replayed by a rebase keep the session that wrote them. A new commit made
      in the middle of a rebase is not recorded.
 2. **Resume.** Next. Snapshots, summariser, `kl resume <sha>`. Everything works from
-   the CLI at this point. Needs Postgres reachable from the host.
+   the CLI at this point. Needs Postgres reachable from the host. A commit's time
+   has one-second precision and the request that made it starts within the same
+   second, so the snapshot must use the ledger's `recorded_at` (milliseconds), not
+   the commit time.
 3. **Daemon and manager agent.** Chat API with the read tools, then the resume tool.
 4. **UI tab.** Chat page, the patch, confirm dialog for resume.
 5. **Hardening.** Retention, upgrade check, backup of the ledger with `make backup`.

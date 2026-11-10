@@ -45,7 +45,8 @@ TRAILER = "Kl-Session"
 HARNESSES = {
     # Reads the key and session id from models.json ("$KL_API_KEY"); see `kl setup pi`.
     "pi": {"cmd": ["pi"], "env": ["kl"]},
-    "hermes": {"cmd": ["hermes", "chat", "--provider", "custom", "--base-url", "{base_url}"], "env": ["kl", "openai"]},
+    # Reads the endpoint and key from its config.yaml ("${KL_API_KEY}"); see `kl setup hermes`.
+    "hermes": {"cmd": ["hermes", "chat"], "env": ["kl"]},
 }
 
 SETUP = {
@@ -74,28 +75,31 @@ serves every session. Then:
   kl run pi --model kl/openrouter/anthropic/claude-sonnet-4.5
 """,
     "hermes": """\
-Hermes takes the endpoint from the command line and the key from OPENAI_API_KEY;
-`kl run hermes` sets both. Hermes removes some environment variables before it
-runs shell commands. If commits made by Hermes show no session in `kl log`, add
-this to ~/.hermes/config.yaml:
+Point Hermes at the gateway once (this is what it then uses for every run, with or
+without kl):
 
-terminal:
-  env_passthrough:
-    - KL_SESSION_ID
-    - GIT_CONFIG_COUNT
-    - GIT_CONFIG_KEY_0
-    - GIT_CONFIG_VALUE_0
+  hermes config set model.provider custom
+  hermes config set model.base_url %(base_url)s
+  hermes config set model.api_key '${KL_API_KEY}'
 
-Hermes has no setting for extra request headers, so its requests are tied to the
-session by virtual key only. Then:
+Hermes fills in ${KL_API_KEY} from the environment `kl run` gives it. Setting
+OPENAI_BASE_URL instead does not work: Hermes 0.19 ignores it and calls OpenRouter.
+Hermes sends no session header, so its requests are tied to the session by
+virtual key only. Then:
 
   kl run hermes -m openrouter/anthropic/claude-sonnet-4.5
+
+If commits made by Hermes show no session in `kl log`, your version is filtering
+the environment of its shell commands. Add to ~/.hermes/config.yaml:
+
+terminal:
+  env_passthrough: [KL_SESSION_ID, GIT_CONFIG_COUNT, GIT_CONFIG_KEY_0, GIT_CONFIG_VALUE_0]
 """,
 }
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def die(msg: str) -> None:
@@ -199,6 +203,19 @@ def gateway(path: str, body: dict) -> dict:
 
 # ---------------------------------------------------------------- kl run
 
+def sweep(db: sqlite3.Connection) -> None:
+    """Close sessions whose launcher was killed before it could clean up, and delete their keys."""
+    for s in db.execute("SELECT id, pid, key_alias FROM sessions WHERE ended_at IS NULL").fetchall():
+        if alive(s["pid"]):
+            continue
+        try:
+            gateway("/key/delete", {"key_aliases": [s["key_alias"]]})
+        except Exception:  # noqa: BLE001  (already gone, or the gateway is down: try again next run)
+            pass
+        db.execute("UPDATE sessions SET ended_at=? WHERE id=?", (now(), s["id"]))
+    db.commit()
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     spec = HARNESSES.get(args.harness, {"cmd": [args.harness], "env": ["kl", "openai"]})
     if not shutil.which(spec["cmd"][0]):
@@ -231,6 +248,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     command = [part.format(base_url=base_url) for part in spec["cmd"]] + args.args
     db = ledger()
+    sweep(db)
     db.execute(
         "INSERT INTO sessions (id, harness, cwd, repo, command, key_hash, key_alias, parent_session,"
         " parent_commit, pid, started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -241,12 +259,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"kl: session {sid} ({alias})", file=sys.stderr)
 
     code = 1
-    old = signal.signal(signal.SIGINT, signal.SIG_IGN)  # Ctrl-C belongs to the harness
+    signal.signal(signal.SIGINT, signal.SIG_IGN)  # Ctrl-C belongs to the harness
+    proc = subprocess.Popen(command, cwd=cwd, env=env,
+                            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+    for sig in (signal.SIGTERM, signal.SIGHUP):  # closing the terminal: stop the harness, then clean up
+        signal.signal(sig, lambda *_: proc.terminate())
     try:
-        code = subprocess.call(command, cwd=cwd, env=env,
-                               preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+        code = proc.wait()
     finally:
-        signal.signal(signal.SIGINT, old)
         db.execute("UPDATE sessions SET ended_at=?, exit_code=? WHERE id=?", (now(), code, sid))
         db.commit()
         try:  # The key was in the harness's environment; it stops working here.
