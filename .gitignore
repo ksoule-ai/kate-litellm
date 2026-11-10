@@ -13,3 +13,6 @@ backups/
 .DS_Store
 .vscode/
 .idea/
+
+# Python bytecode
+__pycache__/
