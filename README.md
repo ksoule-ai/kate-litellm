@@ -103,8 +103,21 @@ that supports tools, then `make restart`. Everything it can do is read-only exce
 starting a resume, which always asks you first. It shows what each tool returned
 under its answers: check a small model's answers against that, because small models
 misreport. In testing, a 3B model invented details and a 7B model did not; use 7B or
-larger. `kl serve` offers the same agent as a local API for the UI tab, which is
-not built yet. Repos it knows are the ones `kl` has run in, plus git repos directly
+larger.
+
+The same agent is in the admin UI as the **Agent Sessions** tab, under Logs in the
+sidebar. The tab shows a page served from your machine, so keep this running in a
+terminal:
+
+```sh
+kl serve        # or: make serve
+```
+
+The first time, open the link `kl serve` prints (or paste the token it prints into
+the tab) to connect your browser; that is remembered. A resume asked for in the tab
+shows what it will do and waits for you to press Start session. If `make logs` shows
+`patch-ui: WARNING script loader not found`, a new LiteLLM image has changed and the
+tab is missing; the page still works on its own at `http://localhost:4002`. Repos it knows are the ones `kl` has run in, plus git repos directly
 inside any folder listed in `KL_REPO_ROOTS`.
 
 Each `kl run` gets its own virtual key (named `kl-<harness>-<id>` in the UI, deleted
@@ -125,6 +138,7 @@ Design and status: [docs/AGENT-SESSIONS-PLAN.md](docs/AGENT-SESSIONS-PLAN.md).
 | `make logs` | Follow gateway logs |
 | `make cache` | Cached vs uncached token report |
 | `make prompt ID=…` | Final prompt the model saw for a logged request |
+| `make serve` | Run the session manager behind the Agent Sessions tab |
 | `make backup` | Dump the database to `backups/` |
 | `make psql` | Open a SQL shell on the database |
 
@@ -134,5 +148,5 @@ Design and status: [docs/AGENT-SESSIONS-PLAN.md](docs/AGENT-SESSIONS-PLAN.md).
 - `config/litellm.yaml`: providers, models, logging settings
 - `config/chat-templates.yaml`: where each model's chat template comes from
 - `.env.example`: every variable the stack reads
-- `kl/`: agent session launcher, git hooks, manager agent and their test (`make kl-test`)
+- `kl/`: agent session launcher, git hooks, manager agent, its chat page (`kl/ui/`) and their test (`make kl-test`)
 - `scripts/`: `.env` bootstrap, smoke test, cache report query, UI patch, prompt renderer

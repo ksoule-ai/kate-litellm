@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Sessions</title>
+<link rel="stylesheet" href="/chat.css">
+</head>
+<body>
+<header>
+  <h1>Agent Sessions</h1>
+  <span id="model" class="muted"></span>
+  <button id="new" type="button" hidden>New chat</button>
+</header>
+
+<main id="signin" hidden>
+  <div class="card">
+    <h2>Connect this browser</h2>
+    <p>The session manager can read your repos and logs, so it only answers a browser that has its token.</p>
+    <p>In the terminal where <code>kl serve</code> is running, open the link it printed, or paste the token here.</p>
+    <form id="signin-form">
+      <input id="token" type="password" autocomplete="off" placeholder="Token" aria-label="Token">
+      <button type="submit">Connect</button>
+    </form>
+    <p id="signin-error" class="error" hidden>That token was not accepted.</p>
+  </div>
+</main>
+
+<main id="chat" hidden>
+  <div id="log" aria-live="polite">
+    <div id="empty">
+      <p>Ask about your agent sessions, commits and gateway logs, or ask to continue from a past commit.</p>
+      <div id="suggestions">
+        <button type="button">List my most recent agent sessions</button>
+        <button type="button">Which repos have agent sessions, and how many commits in each?</button>
+        <button type="button">How many requests and tokens did each model use?</button>
+      </div>
+    </div>
+  </div>
+  <form id="ask">
+    <textarea id="input" rows="1" placeholder="Ask about sessions, commits or logs" aria-label="Message"></textarea>
+    <button id="send" type="submit">Send</button>
+  </form>
+  <p class="foot muted">Runs on a local model. It shows what each tool returned: check answers against it.</p>
+</main>
+
+<main id="down" hidden>
+  <div class="card">
+    <h2>Session manager not reachable</h2>
+    <p>Start it in a terminal with <code>kl serve</code>, then try again.</p>
+    <button id="retry" type="button">Try again</button>
+  </div>
+</main>
+<script src="/chat.js"></script>
+</body>
+</html>

@@ -194,7 +194,25 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
      is the floor; larger ones were not tried.
    - Summaries by the 3B model were thin (it missed the person's request). The
      summariser alias still points at a hosted model.
-4. **UI tab.** Chat page, the patch, confirm dialog for resume.
+4. **UI tab.** Built and tested in a headless browser against the real admin UI
+   (LiteLLM 1.108) with the real local model: open the tab, connect, ask, expand a
+   tool step, decline a resume, approve a resume (a session started in a new
+   worktree), leave and come back, dark mode, reload. How it turned out:
+   - **The chat page** is three static files in `kl/ui/`, served by `kl serve`. It
+     shows each tool call with its result, and a resume as a card with Start session
+     and Decline. Model and tool text is put on the page as text only, under a
+     content security policy that allows nothing but the page's own files.
+   - **The tab** does not rewrite LiteLLM's code. `kl/ui/tab.js` is appended to the
+     script loader every UI page loads and works on the DOM: it copies one of the
+     sidebar's own links to make the entry and lays the page over the content area.
+     It depends on the sidebar's markup (`aside[data-slot=sidebar] nav`) and on the
+     loader file being named `turbopack-*.js`.
+   - **No cookies.** A cookie for `localhost` is sent to every server on localhost,
+     whatever its port, so it would have handed the token to any dev server you run.
+     The page keeps the token in its own storage and sends it as a header. The
+     sign-in link carries it after `#`, which is never sent to a server.
+   - **`kl serve` is a separate process on the host** and has to be started by hand.
+     The tab says so when it is not running.
 5. **Hardening.** Retention, upgrade check, backup of the ledger with `make backup`.
 
 ## Issues

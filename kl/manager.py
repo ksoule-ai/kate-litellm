@@ -596,9 +596,12 @@ def cmd_chat(core, args) -> int:
 # ---------------------------------------------------------------- kl serve
 
 def cmd_serve(core, args) -> int:
-    """Local HTTP API for the chat tab. Loopback only. Every request must carry the
-    token (header or cookie) and name this server as its Host; requests that change
-    anything must also come from this server's own pages."""
+    """The chat page and its API, for the tab in the gateway's admin UI. Loopback
+    only. Every request must name this server as its Host. The page itself holds
+    nothing private and is served to anyone on this machine; every API request must
+    carry the token, and those that change anything must come from this server's
+    own page. No cookies: a cookie for localhost would be sent to every other
+    server on this machine's localhost too."""
     token_path = os.path.join(core.KL_HOME, "daemon.token")
     os.makedirs(core.KL_HOME, mode=0o700, exist_ok=True)
     if not os.path.exists(token_path):
@@ -609,6 +612,13 @@ def cmd_serve(core, args) -> int:
     hosts = {f"localhost:{args.port}", f"127.0.0.1:{args.port}"}
     origins = {f"http://{h}" for h in hosts}
     agents: dict = {}
+    ui = os.path.join(os.path.dirname(os.path.realpath(__file__)), "ui")
+    static = {"/": ("index.html", "text/html"), "/chat.js": ("chat.js", "text/javascript"), "/chat.css": ("chat.css", "text/css")}
+    gateway_port = core.gateway_url().rsplit(":", 1)[-1]
+    # Only this page's own files may load or run, and only the gateway's admin UI may show it in a frame.
+    csp = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; "
+           f"frame-ancestors 'self' http://localhost:{gateway_port} http://127.0.0.1:{gateway_port}")
+    detail = (core.stack_env().get("KL_MANAGER_MODEL") or "").replace("ollama_chat/", "").replace("ollama/", "")
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -630,28 +640,31 @@ def cmd_serve(core, args) -> int:
             if self.command != "GET" and origin is not None and origin not in origins:
                 self.reply(403, {"error": "cross-origin request refused"})
                 return False
-            cookie = re.search(r"(?:^|;\s*)kl_token=([^;]+)", self.headers.get("Cookie") or "")
-            given = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip() or (cookie.group(1) if cookie else "")
+            if self.command == "GET" and self.path.partition("?")[0] in static:
+                return True
+            given = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
             if not hmac.compare_digest(hashlib.sha256(given.encode()).digest(), hashlib.sha256(token.encode()).digest()):
-                self.reply(401, {"error": "missing or wrong token; open the URL that `kl serve` printed"})
+                self.reply(401, {"error": "missing or wrong token; open the link that `kl serve` printed"})
                 return False
             return True
 
         def do_GET(self):
-            path, _, query = self.path.partition("?")
-            if path == "/" and query.startswith("token="):  # first visit: swap the token in the URL for a cookie
-                if self.headers.get("Host") in hosts and hmac.compare_digest(query[6:].encode(), token.encode()):
-                    self.send_response(303)
-                    self.send_header("Set-Cookie", f"kl_token={token}; Path=/; HttpOnly; SameSite=Strict")
-                    self.send_header("Location", "/")
-                    self.end_headers()
-                    return
+            path = self.path.partition("?")[0]
             if not self.allowed():
                 return
+            if path in static:
+                name, kind = static[path]
+                with open(os.path.join(ui, name), "rb") as f:
+                    body = f.read()
+                self.send_response(200)
+                for k, v in {"Content-Type": kind + "; charset=utf-8", "Content-Length": str(len(body)), "Cache-Control": "no-store",
+                             "Content-Security-Policy": csp, "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"}.items():
+                    self.send_header(k, v)
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if path == "/api/health":
-                return self.reply(200, {"ok": True, "model": MODEL})
-            if path == "/":
-                return self.reply(200, {"kl": "manager daemon", "api": ["/api/chat", "/api/confirm", "/api/health"]})
+                return self.reply(200, {"ok": True, "model": MODEL, "model_detail": f"{MODEL} · {detail}" if detail else MODEL})
             self.reply(404, {"error": "not found"})
 
         def do_POST(self):
@@ -686,8 +699,9 @@ def cmd_serve(core, args) -> int:
             emit({"type": "done", "waiting_for_confirmation": bool(agent.pending)})
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print(f"kl: manager API on http://localhost:{args.port} (model {MODEL})\n"
-          f"kl: open once to sign this browser in: http://localhost:{args.port}/?token={token}", file=sys.stderr)
+    print(f"kl: session manager on http://localhost:{args.port} (model {MODEL}); in the gateway UI it is the Agent Sessions tab\n"
+          f"kl: open this link once to connect your browser: http://localhost:{args.port}/#token={token}\n"
+          f"kl: or paste this token into the tab: {token}", file=sys.stderr)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -21,6 +21,7 @@ services:
     volumes:
       - ./config/litellm.yaml:/app/config.yaml:ro
       - ./scripts/patch-ui.py:/app/patch-ui.py:ro
+      - ./kl/ui/tab.js:/app/kl-tab.js:ro
     extra_hosts:
       # Lets the container reach model servers running on the Mac itself.
       - "host.docker.internal:host-gateway"

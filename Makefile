@@ -1,4 +1,4 @@
-.PHONY: init up down restart logs ps pull test cache prompt backup psql kl-test
+.PHONY: init up down restart logs ps pull test cache prompt backup psql kl-test serve
 
 init:      ## Create .env with generated secrets
 	./scripts/init-env.sh
@@ -40,6 +40,9 @@ backup:    ## Dump the database to backups/
 
 psql:
 	docker compose exec db psql -U litellm litellm
+
+serve:     ## Run the session manager behind the UI's Agent Sessions tab (stays in the foreground)
+	./kl/kl serve
 
 kl-test:   ## Test the kl launcher, hooks and ledger (no gateway needed)
 	./kl/test.sh

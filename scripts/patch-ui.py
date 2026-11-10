@@ -11,6 +11,10 @@ docker-compose.yml). The UI ships as minified JS, so this rewrites it in place:
   - a "Final prompt" section shows what the model saw after its chat template,
     rendered by the `prompt` service (scripts/render-prompt.py)
 
+It also adds an "Agent Sessions" entry to the sidebar, which shows the kl chat
+page (see kl/ui/tab.js). That part does not rewrite LiteLLM's code: tab.js is
+appended to the script loader every page already loads, and works on the DOM.
+
 It never blocks startup: if a new image changes the bundle so the patterns no
 longer match, the file is left untouched and a warning is printed. The stock
 file is kept next to it as <name>.orig, so a changed patch can be re-applied.
@@ -26,6 +30,9 @@ CHUNKS = os.path.join(
     os.path.dirname(litellm.__file__), "proxy", "_experimental", "out", "_next", "static", "chunks"
 )
 MARKER = "/*kate-ui-patch*/"
+TAB_JS = "/app/kl-tab.js"
+TAB_START, TAB_END = "\n;/*kl-agents-tab*/", "/*end-kl-agents-tab*/\n"
+KL_PORT = os.environ.get("KL_PORT", "4002")
 PROMPT_PORT = os.environ.get("PROMPT_PORT", "4001")
 ID = r"[\w$]+"
 
@@ -117,8 +124,31 @@ def patch(src):
     return MARKER + src.replace("__REQ__", request_var[0]).replace("__J__", jsx[0][0])
 
 
+def add_tab(chunks_dir):
+    """Append kl/ui/tab.js to the UI's script loader, replacing any earlier copy."""
+    if not os.path.exists(TAB_JS):
+        return
+    with open(TAB_JS, encoding="utf-8") as f:
+        tab = f.read().replace("__KL_PORT__", KL_PORT)
+    loaders = glob.glob(os.path.join(chunks_dir, "turbopack-*.js"))
+    if len(loaders) != 1:
+        print("patch-ui: WARNING script loader not found; Agent Sessions tab not added")
+        return
+    with open(loaders[0], encoding="utf-8") as f:
+        src = f.read()
+    if TAB_START in src:
+        src = src[:src.index(TAB_START)] + src[src.index(TAB_END) + len(TAB_END):]
+    with open(loaders[0], "w", encoding="utf-8") as f:
+        f.write(src + TAB_START + tab + TAB_END)
+    print(f"patch-ui: added Agent Sessions tab to {os.path.basename(loaders[0])}")
+
+
 def main():
     chunks_dir = sys.argv[1] if len(sys.argv) > 1 else CHUNKS
+    try:
+        add_tab(chunks_dir)
+    except Exception as e:  # the log viewer patch below does not depend on this
+        print(f"patch-ui: WARNING Agent Sessions tab not added: {e}")
     targets = []
     for path in glob.glob(os.path.join(chunks_dir, "*.js")):
         with open(path, encoding="utf-8") as f:

@@ -204,8 +204,11 @@ check "API: wrong token, no access"            '[[ "$(api -o /dev/null -w "%{htt
 check "API: token gives access"                'api -H "Authorization: Bearer $TOKEN" $U/api/health | grep -q "\"ok\": true"'
 check "API: other Host is refused"             '[[ "$(api -o /dev/null -w "%{http_code}" -H "Host: evil.example" -H "Authorization: Bearer $TOKEN" $U/api/health)" == 403 ]]'
 check "API: other Origin cannot post"          '[[ "$(api -o /dev/null -w "%{http_code}" -H "Origin: http://evil.example" -H "Authorization: Bearer $TOKEN" -d "{}" $U/api/chat)" == 403 ]]'
-check "API: sign-in link sets a strict cookie" 'api -D - -o /dev/null "$U/?token=$TOKEN" | grep -qi "set-cookie: kl_token=.*HttpOnly; SameSite=Strict"'
-check "API: cookie gives access"               'api -H "Cookie: kl_token=$TOKEN" $U/api/health | grep -q "\"ok\": true"'
+check "API: no cookies are set"                '! api -D - -o /dev/null -H "Authorization: Bearer $TOKEN" $U/api/health | grep -qi "set-cookie"'
+check "page is served without a token"        'api $U/ | grep -q "<title>Agent Sessions</title>" && api $U/chat.js | grep -q "kl.token" && api $U/chat.css | grep -q "details.step"'
+check "page may only be framed by the gateway" 'api -D - -o /dev/null $U/ | grep -qi "content-security-policy:.*script-src .self.;.*frame-ancestors .self. http://localhost:[0-9]* http://127.0.0.1:[0-9]*"'
+check "page is not served under another Host" '[[ "$(api -o /dev/null -w "%{http_code}" -H "Host: evil.example" $U/)" == 403 ]]'
+check "no other files are served"             '[[ "$(api -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" $U/manager.py)" == 404 && "$(api -o /dev/null -w "%{http_code}" --path-as-is $U/../kl)" != 200 ]]'
 check "API: chat streams the steps"            'api -H "Authorization: Bearer $TOKEN" -d "{\"message\": \"sessions\"}" $U/api/chat > "$T/chat.out" && grep -q "\"type\": \"tool\", \"name\": \"list_sessions\"" "$T/chat.out" && grep -q "\"type\": \"text\"" "$T/chat.out" && tail -1 "$T/chat.out" | grep -q "\"waiting_for_confirmation\": false"'
 api -H "Authorization: Bearer $TOKEN" -d "{\"conversation\": \"c1\", \"message\": \"resume repo $FIRST true\"}" $U/api/chat > "$T/chat.out"
 check "API: resume waits for confirmation"     'grep -q "\"type\": \"confirm\"" "$T/chat.out" && tail -1 "$T/chat.out" | grep -q "\"waiting_for_confirmation\": true" && [[ "$(ls "$T/repo-kl" | wc -l)" == "$((N + 1))" ]]'
