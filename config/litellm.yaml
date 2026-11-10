@@ -51,24 +51,29 @@ model_list:
       api_base: https://nltr8ll7t7v2xvnw.endpoints.huggingface.cloud/v1
       api_key: os.environ/HF_TOKEN
 
-  # Model that writes handoff summaries for `kl resume` (see the README). kl
-  # calls it by this name, so changing the model here is all it takes to move
-  # to a different one, e.g. a local one: model: "ollama_chat/<name>" with
-  # api_base: http://host.docker.internal:11434 and no api_key.
-  # Whatever runs here is sent the agent conversations being summarised.
+  # The two models kl uses itself (see the README, "Agent sessions"). Both run
+  # locally on Ollama, so agent conversations, logs and repo contents that kl
+  # reads never leave this machine. Set KL_LOCAL_MODEL in .env to a model you
+  # have pulled that supports tools (`ollama show <name>` lists "tools" under
+  # Capabilities). To give one of them a different model, replace its `model`.
+  #
+  # num_ctx is how much text Ollama accepts per request, in tokens. Ollama's
+  # own default is 4096, and it refuses longer requests (older versions cut
+  # them silently), which is less than one long conversation to summarise.
+
+  # Writes the handoff summary for `kl resume`.
   - model_name: kl-summarizer
     litellm_params:
-      model: openrouter/anthropic/claude-sonnet-4.5
-      api_key: os.environ/OPENROUTER_API_KEY
+      model: os.environ/KL_LOCAL_MODEL
+      api_base: http://host.docker.internal:11434
+      num_ctx: 16384
 
-  # The manager agent you talk to with `kl chat` and in the UI tab. It reads
-  # your logs and repos, so it runs locally on Ollama. Set KL_MANAGER_MODEL in
-  # .env to a model you have pulled that supports tools (`ollama show <name>`
-  # lists "tools" under Capabilities).
+  # The manager agent behind `kl chat` and the Agent Sessions tab.
   - model_name: kl-manager
     litellm_params:
-      model: os.environ/KL_MANAGER_MODEL
+      model: os.environ/KL_LOCAL_MODEL
       api_base: http://host.docker.internal:11434
+      num_ctx: 16384
 
 litellm_settings:
   # Silently drop request params a given provider doesn't support, so one

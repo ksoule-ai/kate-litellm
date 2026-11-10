@@ -84,8 +84,8 @@ kl resume --harness hermes <commit>
 This leaves your checkout alone. It adds a worktree next to the repo
 (`<repo>-kl/<commit>-1`, branch `kl/resume-<commit>-1`), writes a handoff note to
 `.kl/HANDOFF.md` in it, and starts the agent there in tmux with an opening message
-telling it to read the note. The note is a summary, written by the `kl-summarizer`
-model in `config/litellm.yaml`, of the conversation the first agent had had when it
+telling it to read the note. The note is a summary, written by your local model
+(the `kl-summarizer` entry in `config/litellm.yaml`), of the conversation the first agent had had when it
 made the commit; `kl` copies that conversation out of the request log at commit time,
 so it outlasts the log's 7 days. Remove a worktree with `git worktree remove`.
 
@@ -98,8 +98,9 @@ kl chat "which session made the last commit in my-repo, and what was it asked to
 
 It can list sessions and commits, read the conversation behind a commit, query the
 request log with SQL, read your repos with git, and start a `kl resume` for you. It
-runs on a local Ollama model: set `KL_MANAGER_MODEL` in `.env` to one you have pulled
-that supports tools, then `make restart`. Everything it can do is read-only except
+runs on a local Ollama model, as do the handoff summaries: set `KL_LOCAL_MODEL` in
+`.env` to one you have pulled that supports tools, then `make restart`. Nothing kl
+reads (conversations, logs, repo contents) is sent off this machine. Everything it can do is read-only except
 starting a resume, which always asks you first. It shows what each tool returned
 under its answers: check a small model's answers against that, because small models
 misreport. In testing, Granite 4.1 8B answered every test question correctly, Qwen 2.5

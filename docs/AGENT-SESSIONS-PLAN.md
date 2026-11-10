@@ -198,9 +198,14 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
      resume, and wrote a sound handoff summary of a realistic multi-turn
      conversation (it kept the person's correction and constraints, with small
      slips). On 4 CPU cores an answer took 25 to 50 seconds and that summary 134.
-   - Summaries by the 3B model were thin. The summariser alias still points at a
-     hosted model; Granite 4.1 8B looks good enough to take it over, after a look at
-     summaries of real sessions.
+   - **Everything kl runs is now local.** The summariser alias points at the same
+     Ollama model as the manager (`KL_LOCAL_MODEL` in `.env`), so conversations, logs
+     and repo contents kl reads stay on the machine. Summaries by the 3B model were
+     thin; Granite 4.1 8B's are sound on a realistic conversation, and summaries of
+     real sessions are still worth reading before relying on them.
+   - **Both aliases set `num_ctx: 16384`.** Ollama's default is 4,096 tokens and it
+     refuses anything longer, which one piece of a long conversation exceeds. A
+     manager chat with long tool results would have hit it too.
    - A resumed session started in tmux now gets kl's settings passed in explicitly;
      a window in an already running tmux server otherwise inherits that server's.
 4. **UI tab.** Built and tested in a headless browser against the real admin UI
@@ -264,7 +269,7 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
   need a per-repo setup command before the agent can run anything.
 - **Model choice for the manager.** It needs dependable tool calling over long
   contexts; the small Granite endpoints configured here are unlikely to manage it.
-  The MVP uses a hosted model and the final version a local one; see Decisions.
+  It now runs locally; see Decisions.
 - **UI patch brittleness.** Same risk as today's patch: a new image can break it. Pin
   `LITELLM_IMAGE` before building on it.
 - **Postgres has no host port today.** The daemon needs one on loopback, with a
@@ -279,9 +284,9 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
    `.env` and UI patch.
 2. **How to reach the resumed agent.** tmux, with the UI showing the attach command. A
    web terminal in the tab can come later.
-3. **Manager model.** Local on Ollama from the start (changed from "hosted for the
-   MVP"): set `KL_MANAGER_MODEL` in `.env`. The summariser is still hosted. The
-   original reasoning follows.
+3. **Manager and summariser model.** Both local on Ollama (changed from "hosted for
+   the MVP"): set `KL_LOCAL_MODEL` in `.env`. The points below were written for the
+   hosted MVP; the alias design is what made the move a config change.
    A hosted model for the MVP, a local model in the final version.
    To keep that swap a config change:
    - The daemon calls two gateway aliases, `kl-manager` and `kl-summarizer`, defined in

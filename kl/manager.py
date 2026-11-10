@@ -358,7 +358,7 @@ class Tools:
         subject = self.core.git("show", "-s", "--format=%s", sha, cwd=path)
         harness = f"{args['harness']} session" if args.get("harness") else "agent session (same harness as made the commit)"
         return (f"Start a new {harness} in a new worktree of {path}, at commit {sha[:10]} (\"{subject}\").\n"
-                "Your checkout is not changed. The conversation up to that commit is sent to the summariser model.")
+                "Your checkout is not changed.")
 
     WRITE = {"resume_from_commit"}
 
@@ -619,7 +619,7 @@ def cmd_serve(core, args) -> int:
     # Only this page's own files may load or run, and only the gateway's admin UI may show it in a frame.
     csp = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; "
            f"frame-ancestors 'self' http://localhost:{gateway_port} http://127.0.0.1:{gateway_port}")
-    detail = (core.stack_env().get("KL_MANAGER_MODEL") or "").replace("ollama_chat/", "").replace("ollama/", "")
+    detail = (core.stack_env().get("KL_LOCAL_MODEL") or "").replace("ollama_chat/", "").replace("ollama/", "")
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
