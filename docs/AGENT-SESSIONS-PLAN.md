@@ -1,0 +1,178 @@
+# Plan: commit-linked agent sessions
+
+## Goal
+
+Run open source coding harnesses (Pi, Hermes) through this gateway, record which
+gateway session produced each git commit, and be able to go back to any commit, hand a
+new agent a summary of the conversation up to that point, and carry on from there. All
+of it is driven from a chat tab in the gateway's admin UI, where a manager agent can
+read the logs and the repos.
+
+## Architecture
+
+```
+ browser: localhost:4000/ui ── "Agents" tab (iframe) ──┐
+                                                       ▼
+ ┌─────────────────────┐   read-only SQL    ┌──────────────────────────────┐
+ │ LiteLLM  :4000      │◀───────────────────│ kl daemon  :4002  (on host)  │
+ │ Postgres (logs)     │   chat completions │  manager agent + tools       │
+ └─────────▲───────────┘◀───────────────────│  ledger.sqlite               │
+           │ model calls, one virtual key   │  git worktrees, tmux         │
+           │ per agent session              └───────▲──────────────┬───────┘
+ ┌─────────┴───────────┐   post-commit hook         │              │ starts
+ │ pi / hermes in tmux │────────────────────────────┘              ▼
+ │ started by `kl run` │                               new harness in a worktree
+ └─────────────────────┘
+```
+
+Three new pieces:
+
+- **`kl` launcher and git hooks** (host). `kl run pi` starts a harness with a session
+  identity; the hooks record each commit against it.
+- **`kl` daemon** (host, loopback only). Owns the ledger, the transcript snapshots, the
+  rollback and resume logic, and the manager agent. It has to run on the host, not in
+  Docker, because it starts harness processes and runs git in the real repos.
+- **Agents tab**. One more patch in `scripts/patch-ui.py` that adds a nav entry showing
+  the daemon's chat page in an iframe.
+
+## How each part works
+
+### 1. Session identity
+
+LiteLLM already groups requests into sessions: `LiteLLM_SpendLogs.session_id` is filled
+from `x-litellm-session-id`, any `x-<vendor>-session-id` header, a bare `x-session-id`,
+or `litellm_session_id` in the body (checked in LiteLLM 1.108.4). The harnesses will
+not all send one, so the launcher does not depend on it:
+
+- `kl run <harness> [repo]` creates a **kl session** (a UUID), mints a **virtual key
+  for that session** through `/key/generate` with the session, repo and harness in the
+  key's metadata, and starts the harness with that key and
+  `KL_SESSION_ID` in its environment.
+- Every request is then attributable by key, whatever the harness sends. Where the
+  harness allows a custom header (Pi's `models.json` has a `headers` field), the
+  launcher also sets `x-litellm-session-id` so the stock Logs view groups correctly.
+
+### 2. Commit ledger
+
+- The launcher points the repo at kl's hooks (`core.hooksPath`, chaining to existing
+  hooks). The harness's shell tool inherits `KL_SESSION_ID`, so the hooks see it.
+- `prepare-commit-msg` adds a `Kl-Session: <id>` trailer. The link then lives in git
+  itself and survives rebases, pushes and a lost database.
+- `post-commit` posts `{repo, sha, parents, branch, session, time}` to the daemon,
+  which stores it in `ledger.sqlite`. If the daemon is down the hook appends to a local
+  spool file and never blocks the commit. `post-rewrite` remaps SHAs after amend and
+  rebase; `pre-push` records which commits reached GitHub.
+- On each commit the daemon also **snapshots the transcript**: a few seconds later
+  (spend logs are written in batches) it finds the session's last request that started
+  before the commit and copies its request and response bodies into the ledger. That
+  request's `messages` array is the harness's whole context at that moment.
+
+### 3. Rollback and resume
+
+`kl resume <sha>` (also the manager agent's one write tool):
+
+1. `git worktree add <repo>-kl/<short-sha> -b kl/resume-<short-sha>-<n> <sha>`. The
+   original checkout and branch are never reset.
+2. Build the handoff: summarise the snapshot for that commit through the gateway
+   (goal, decisions, state of the work, open threads, files touched), and attach
+   `git log` up to the commit.
+3. Start a new kl session in the worktree with `parent_session` and `parent_commit`
+   recorded, write the summary to `.kl/HANDOFF.md`, and start the harness in tmux with
+   an opening prompt that points at it.
+4. Return the tmux session name to attach to.
+
+### 4. Manager agent
+
+A tool-calling loop in the daemon, using a model through the gateway on its own
+virtual key. Tools:
+
+| Tool | Access |
+| --- | --- |
+| `query_logs(sql)` | Postgres role with `SELECT` only, statement timeout, row cap |
+| `list_sessions`, `get_session`, `get_transcript` | ledger and snapshots |
+| `git(repo, args)` | allowlist: `log`, `show`, `diff`, `status`, `branch`, `worktree list` |
+| `read_file`, `grep` | inside configured repo roots only |
+| `resume_from_commit(repo, sha, harness)` | write; needs a confirm click in the UI |
+
+### 5. UI tab
+
+The stock UI has no plugin mechanism for tabs, so this follows the existing
+`patch-ui.py` approach, kept as small as possible: one nav item and one iframe. The
+chat page itself is plain HTML served by the daemon, so almost nothing depends on the
+minified bundle. If the patch stops matching after an upgrade, the page still works at
+`localhost:4002` directly.
+
+## Phases
+
+0. **Spikes.** Run Pi and Hermes against the gateway by hand. Record which headers
+   each sends, whether tool calling works with the intended models, and whether their
+   shell tools pass the environment through to git hooks.
+1. **Attribution.** `kl run`, key per session, hooks, ledger, `kl log` to list commits
+   with their sessions. Useful by itself.
+2. **Resume.** Snapshots, summariser, `kl resume <sha>`. Everything works from the CLI
+   at this point.
+3. **Daemon and manager agent.** Chat API with the read tools, then the resume tool.
+4. **UI tab.** Chat page, the patch, confirm dialog for resume.
+5. **Hardening.** Retention, upgrade check, backup of the ledger with `make backup`.
+
+## Issues
+
+**Would change the design**
+
+- **Seven-day log retention.** A commit older than a week has no logs left to
+  summarise. The per-commit snapshot fixes this for commits; conversation that never
+  led to a commit is still lost unless retention is raised.
+- **The gateway's sessions are not the harness's sessions.** A harness can start a new
+  conversation, compact, branch (Pi's `/tree`) or spawn subagents inside one launch,
+  and makes side calls (titles, compaction) on the same key. A kl session is "one
+  launch", and the snapshot is "what the model was last shown before the commit".
+  After a compaction that is already a summary, not the full history.
+- **A summary is a lossy resume.** The new agent gets a description of the
+  conversation, not the conversation. Pi stores sessions as a JSONL tree with parent
+  ids, so a true fork of the native session at the commit is possible there later;
+  Hermes keeps sessions in SQLite. The summary route is the one that works for every
+  harness, so it comes first.
+- **The daemon is a local web server that can read every repo and start processes.**
+  Any web page open in the browser can send requests to `localhost:4002`. It needs a
+  token on every request, an `Origin` check and a `Host` check (DNS rebinding) from
+  the first version. The existing prompt renderer on 4001 has none of these, which is
+  acceptable there and would not be here.
+- **Prompt injection into the manager agent.** The logs contain whatever the coding
+  agents read: web pages, issue text, repo files. The manager reads those logs and has
+  tools. That is why its tools are read-only apart from one confirmed action, and why
+  it gets no general shell.
+- **The manager's own requests land in the logs it queries.** Give it a dedicated key
+  and exclude that key by default.
+
+**Limits to accept or work around**
+
+- **Only commits made through `kl run` are attributed.** Commits from a plain
+  terminal, or made through the GitHub API or an MCP server, bypass the hooks. They
+  appear in the ledger as unattributed when the daemon next scans the repo.
+- **Rolling back the repo does not roll back anything else.** Pushed commits, database
+  migrations, installed packages and remote state stay as they are. A fresh worktree
+  also lacks ignored files (`.env`, `node_modules`, build output), so most projects
+  need a per-repo setup command before the agent can run anything.
+- **Model choice for the manager.** It needs dependable tool calling over long
+  contexts; the small Granite endpoints configured here are unlikely to manage it.
+  Using a hosted model means log contents, including any secrets agents saw, are sent
+  to that provider. The same applies to the summariser.
+- **UI patch brittleness.** Same risk as today's patch: a new image can break it. Pin
+  `LITELLM_IMAGE` before building on it.
+- **Postgres has no host port today.** The daemon needs one on loopback, with a
+  separate read-only role.
+- **Harness details move quickly.** Pi was recently renamed (`badlogic/pi-mono` to
+  `earendil-works/pi`) and config field names differ between versions; Hermes's hook
+  API was not confirmed. Phase 0 exists to pin these down per installed version.
+
+## Open decisions
+
+1. **Where the code lives.** Recommended: a `kl/` folder in this repo, since it shares
+   the compose stack, `.env` and UI patch. A separate repo is cleaner only if it should
+   work against other gateways.
+2. **Language for the daemon.** Recommended: Python with `uv`, FastAPI, SQLite. Matches
+   the scripts already here.
+3. **How to reach the resumed agent.** Recommended for the prototype: tmux, with the UI
+   showing the attach command. A web terminal in the tab can come later.
+4. **Retention.** Recommended: keep 7 days in Postgres and rely on snapshots.
+5. **Manager model.** Needs choosing; see the note on log privacy above.
