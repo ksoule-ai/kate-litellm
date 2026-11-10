@@ -102,8 +102,8 @@ runs on a local Ollama model: set `KL_MANAGER_MODEL` in `.env` to one you have p
 that supports tools, then `make restart`. Everything it can do is read-only except
 starting a resume, which always asks you first. It shows what each tool returned
 under its answers: check a small model's answers against that, because small models
-misreport. In testing, a 3B model invented details and a 7B model did not; use 7B or
-larger.
+misreport. In testing, Granite 4.1 8B answered every test question correctly, Qwen 2.5
+7B nearly all, and a 3B model invented details; use 7B or larger.
 
 The same agent is in the admin UI as the **Agent Sessions** tab, under Logs in the
 sidebar. The tab shows a page served from your machine, so keep this running in a

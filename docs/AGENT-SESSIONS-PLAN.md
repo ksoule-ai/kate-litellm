@@ -191,9 +191,18 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
      alike, so tools accept either; `get_commit` answers the commonest question in one
      call; an identical repeated call is refused; lists carry their own totals.
      `kl chat` prints what each tool returned so answers can be checked. A 7B model
-     is the floor; larger ones were not tried.
-   - Summaries by the 3B model were thin (it missed the person's request). The
-     summariser alias still points at a hosted model.
+     is the floor.
+   - **Granite 4.1 8B (4-bit, on Ollama) is the best of the three tried** and is the
+     default in `.env.example`. It answered all seven test questions correctly, most
+     in one tool call, ran the whole tab flow in a browser including an approved
+     resume, and wrote a sound handoff summary of a realistic multi-turn
+     conversation (it kept the person's correction and constraints, with small
+     slips). On 4 CPU cores an answer took 25 to 50 seconds and that summary 134.
+   - Summaries by the 3B model were thin. The summariser alias still points at a
+     hosted model; Granite 4.1 8B looks good enough to take it over, after a look at
+     summaries of real sessions.
+   - A resumed session started in tmux now gets kl's settings passed in explicitly;
+     a window in an already running tmux server otherwise inherits that server's.
 4. **UI tab.** Built and tested in a headless browser against the real admin UI
    (LiteLLM 1.108) with the real local model: open the tab, connect, ask, expand a
    tool step, decline a resume, approve a resume (a session started in a new
