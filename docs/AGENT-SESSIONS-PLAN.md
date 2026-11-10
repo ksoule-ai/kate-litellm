@@ -155,8 +155,7 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
   need a per-repo setup command before the agent can run anything.
 - **Model choice for the manager.** It needs dependable tool calling over long
   contexts; the small Granite endpoints configured here are unlikely to manage it.
-  Using a hosted model means log contents, including any secrets agents saw, are sent
-  to that provider. The same applies to the summariser.
+  The MVP uses a hosted model and the final version a local one; see Decisions.
 - **UI patch brittleness.** Same risk as today's patch: a new image can break it. Pin
   `LITELLM_IMAGE` before building on it.
 - **Postgres has no host port today.** The daemon needs one on loopback, with a
@@ -165,14 +164,28 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
   `earendil-works/pi`) and config field names differ between versions; Hermes's hook
   API was not confirmed. Phase 0 exists to pin these down per installed version.
 
+## Decisions
+
+1. **Where the code lives.** A `kl/` folder in this repo. It shares the compose stack,
+   `.env` and UI patch.
+2. **How to reach the resumed agent.** tmux, with the UI showing the attach command. A
+   web terminal in the tab can come later.
+3. **Manager model.** A hosted model for the MVP, a local model in the final version.
+   To keep that swap a config change:
+   - The daemon calls two gateway aliases, `kl-manager` and `kl-summarizer`, defined in
+     `config/litellm.yaml`. Moving to a local model means repointing the aliases (for
+     example at `ollama/*`, which is already routed), with no code change.
+   - Tools are built for a small model from the start: few of them, flat arguments,
+     capped and pre-summarised results instead of raw log rows, and transcripts read
+     in pages. Summaries of long transcripts are built in chunks, not in one call.
+   - Until the swap, log contents the manager or summariser reads are sent to the
+     hosted provider. Agent sessions that touch secrets should be kept out of its
+     reach during the MVP, or the secrets rotated afterwards.
+   - Phase 5 gains a step: run a fixed set of manager questions and one resume against
+     candidate local models and pick the smallest that passes.
+
 ## Open decisions
 
-1. **Where the code lives.** Recommended: a `kl/` folder in this repo, since it shares
-   the compose stack, `.env` and UI patch. A separate repo is cleaner only if it should
-   work against other gateways.
-2. **Language for the daemon.** Recommended: Python with `uv`, FastAPI, SQLite. Matches
+1. **Language for the daemon.** Recommended: Python with `uv`, FastAPI, SQLite. Matches
    the scripts already here.
-3. **How to reach the resumed agent.** Recommended for the prototype: tmux, with the UI
-   showing the attach command. A web terminal in the tab can come later.
-4. **Retention.** Recommended: keep 7 days in Postgres and rely on snapshots.
-5. **Manager model.** Needs choosing; see the note on log privacy above.
+2. **Retention.** Recommended: keep 7 days in Postgres and rely on snapshots.
