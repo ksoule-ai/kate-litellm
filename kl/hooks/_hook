@@ -1,0 +1,6 @@
+#!/bin/sh
+# Every hook in this folder is a link to this file. It hands over to
+# `kl hook <name>`, which runs the repo's own hook and then kl's part.
+# Without python3 it does nothing, so git is never blocked.
+command -v python3 >/dev/null 2>&1 || exit 0
+exec python3 "$(dirname "$0")/../kl" hook "$(basename "$0")" "$@"

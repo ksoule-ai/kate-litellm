@@ -58,6 +58,30 @@ from `scripts/patch-ui.py`, which edits LiteLLM's bundled UI when the gateway
 starts. If a new LiteLLM image no longer matches, `make logs` shows a `patch-ui:
 WARNING` line and the stock UI is used.
 
+## Agent sessions (`kl`)
+
+`kl` starts a coding harness through the gateway and records which session made
+each git commit. Put `kl/kl` on your `PATH` (for example
+`ln -s "$PWD/kl/kl" ~/.local/bin/kl`), then:
+
+```sh
+kl setup pi        # one-time config to paste; also `kl setup hermes`
+cd ~/code/some-repo
+kl run pi --model kl/openrouter/anthropic/claude-sonnet-4.5
+kl log             # commits, with the session and harness that made each
+kl sessions        # every tracked session
+kl session <id>    # one session: its commits and its gateway requests
+```
+
+Each `kl run` gets its own virtual key (named `kl-<harness>-<id>` in the UI, deleted
+when the harness exits), so its requests can be told apart in the logs whatever the
+harness sends. Commits get a `Kl-Session:` trailer and a row in
+`~/.kl/ledger.sqlite`. The hooks reach git through the harness's environment, so
+your repos' config is untouched and their own hooks still run; `kl hooks install`
+puts them on a repo permanently if a harness does not pass its environment on.
+
+Design and status: [docs/AGENT-SESSIONS-PLAN.md](docs/AGENT-SESSIONS-PLAN.md).
+
 ## Day to day
 
 | Command | What it does |
@@ -76,4 +100,5 @@ WARNING` line and the stock UI is used.
 - `config/litellm.yaml`: providers, models, logging settings
 - `config/chat-templates.yaml`: where each model's chat template comes from
 - `.env.example`: every variable the stack reads
+- `kl/`: agent session launcher, git hooks and their test (`make kl-test`)
 - `scripts/`: `.env` bootstrap, smoke test, cache report query, UI patch, prompt renderer

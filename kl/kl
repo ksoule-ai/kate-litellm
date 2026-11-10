@@ -1,0 +1,515 @@
+#!/usr/bin/env python3
+"""kl: run coding harnesses through the gateway and log which session made each commit.
+
+  kl run <harness> [args...]   start pi, hermes or any command as a tracked session
+  kl log [-n N] [path]         commits of a repo with the session that made each
+  kl sessions                  tracked sessions, newest first
+  kl session <id>              one session: its commits and its gateway requests
+  kl setup <harness>           print the one-time config a harness needs
+  kl hooks install|uninstall   keep the hooks on a repo outside `kl run` too
+
+`kl run` creates a session id, mints a gateway virtual key for that session, and
+starts the harness with both in its environment. Git hooks (kl/hooks, pointed at
+through the environment, so the repo's own config is not touched) add a
+`Kl-Session:` trailer to each commit and record it in ~/.kl/ledger.sqlite. The
+repo's own hooks still run.
+
+Standard library only, Python 3.9+. See docs/AGENT-SESSIONS-PLAN.md.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import signal
+import sqlite3
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+import uuid
+from datetime import datetime, timezone
+
+KL_DIR = os.path.dirname(os.path.realpath(__file__))
+HOOKS_DIR = os.path.join(KL_DIR, "hooks")
+STACK_DIR = os.path.dirname(KL_DIR)  # the kate-litellm checkout: .env, docker-compose.yml
+KL_HOME = os.path.expanduser(os.environ.get("KL_HOME", "~/.kl"))
+TRAILER = "Kl-Session"
+
+# How each harness is started. {base_url} is the gateway's /v1 URL. `env` says
+# which variables carry the session's key: "kl" is always set (KL_API_KEY,
+# KL_BASE_URL, KL_SESSION_ID); "openai" adds OPENAI_API_KEY and OPENAI_BASE_URL.
+# Any other name given to `kl run` is run as a command with both sets.
+HARNESSES = {
+    # Reads the key and session id from models.json ("$KL_API_KEY"); see `kl setup pi`.
+    "pi": {"cmd": ["pi"], "env": ["kl"]},
+    "hermes": {"cmd": ["hermes", "chat", "--provider", "custom", "--base-url", "{base_url}"], "env": ["kl", "openai"]},
+}
+
+SETUP = {
+    "pi": """\
+Add this provider to ~/.pi/agent/models.json (merge it into "providers" if the file
+exists), listing the gateway models you want Pi to offer:
+
+{
+  "providers": {
+    "kl": {
+      "name": "kate-litellm",
+      "baseUrl": "%(base_url)s",
+      "api": "openai-completions",
+      "apiKey": "$KL_API_KEY",
+      "headers": { "x-litellm-session-id": "$KL_SESSION_ID" },
+      "models": [
+        { "id": "openrouter/anthropic/claude-sonnet-4.5" }
+      ]
+    }
+  }
+}
+
+Pi resolves "$NAME" values from the environment on every request, so this one block
+serves every session. Then:
+
+  kl run pi --model kl/openrouter/anthropic/claude-sonnet-4.5
+""",
+    "hermes": """\
+Hermes takes the endpoint from the command line and the key from OPENAI_API_KEY;
+`kl run hermes` sets both. Hermes removes some environment variables before it
+runs shell commands. If commits made by Hermes show no session in `kl log`, add
+this to ~/.hermes/config.yaml:
+
+terminal:
+  env_passthrough:
+    - KL_SESSION_ID
+    - GIT_CONFIG_COUNT
+    - GIT_CONFIG_KEY_0
+    - GIT_CONFIG_VALUE_0
+
+Hermes has no setting for extra request headers, so its requests are tied to the
+session by virtual key only. Then:
+
+  kl run hermes -m openrouter/anthropic/claude-sonnet-4.5
+""",
+}
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def die(msg: str) -> None:
+    sys.exit(f"kl: {msg}")
+
+
+# ---------------------------------------------------------------- ledger
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY, harness TEXT, cwd TEXT, repo TEXT, command TEXT,
+  key_hash TEXT, key_alias TEXT, parent_session TEXT, parent_commit TEXT,
+  pid INTEGER, started_at TEXT, ended_at TEXT, exit_code INTEGER
+);
+CREATE TABLE IF NOT EXISTS commits (
+  repo TEXT, sha TEXT, session_id TEXT, attribution TEXT, parents TEXT, branch TEXT,
+  worktree TEXT, subject TEXT, committed_at TEXT, recorded_at TEXT, rewritten_from TEXT,
+  PRIMARY KEY (repo, sha)
+);
+CREATE TABLE IF NOT EXISTS rewrites (
+  repo TEXT, old_sha TEXT, new_sha TEXT, kind TEXT, session_id TEXT, at TEXT
+);
+CREATE TABLE IF NOT EXISTS pushes (
+  repo TEXT, remote TEXT, url TEXT, local_ref TEXT, sha TEXT, remote_ref TEXT,
+  session_id TEXT, at TEXT
+);
+CREATE INDEX IF NOT EXISTS commits_session ON commits (session_id);
+"""
+
+
+def ledger() -> sqlite3.Connection:
+    os.makedirs(KL_HOME, mode=0o700, exist_ok=True)
+    db = sqlite3.connect(os.path.join(KL_HOME, "ledger.sqlite"), timeout=10)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    db.executescript(SCHEMA)
+    return db
+
+
+def find_session(db: sqlite3.Connection, prefix: str) -> sqlite3.Row:
+    rows = db.execute("SELECT * FROM sessions WHERE id LIKE ?", (prefix + "%",)).fetchall()
+    if len(rows) != 1:
+        die(f"{'no' if not rows else 'more than one'} session matches '{prefix}'")
+    return rows[0]
+
+
+# ---------------------------------------------------------------- git
+
+def git(*args: str, cwd: str | None = None, check: bool = False) -> str:
+    """Run git and return its stdout stripped; '' on failure unless check."""
+    p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    if p.returncode and check:
+        die(p.stderr.strip() or f"git {' '.join(args)} failed")
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def repo_id(cwd: str | None = None) -> str:
+    """One name per repository, shared by all its worktrees: the main checkout's path."""
+    common = git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=cwd)
+    if not common:
+        return ""
+    common = os.path.realpath(common)
+    return os.path.dirname(common) if os.path.basename(common) == ".git" else common
+
+
+# ---------------------------------------------------------------- gateway
+
+def stack_env() -> dict:
+    """Values from the stack's .env (master key, port); the environment wins."""
+    env = {}
+    try:
+        with open(os.path.join(STACK_DIR, ".env"), encoding="utf-8") as f:
+            for line in f:
+                key, sep, value = line.strip().partition("=")
+                if sep and not key.startswith("#"):
+                    env[key.strip()] = value.strip().strip("'\"")
+    except OSError:
+        pass
+    return env
+
+
+def gateway_url() -> str:
+    port = os.environ.get("LITELLM_PORT") or stack_env().get("LITELLM_PORT") or "4000"
+    return os.environ.get("KL_GATEWAY_URL", f"http://localhost:{port}").rstrip("/")
+
+
+def gateway(path: str, body: dict) -> dict:
+    master = os.environ.get("KL_MASTER_KEY") or stack_env().get("LITELLM_MASTER_KEY")
+    if not master:
+        die(f"no LITELLM_MASTER_KEY in {STACK_DIR}/.env (run `make init`) and KL_MASTER_KEY is not set")
+    req = urllib.request.Request(
+        gateway_url() + path,
+        data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {master}", "Content-Type": "application/json"},
+    )
+    # The gateway is on loopback: never send the master key through a proxy.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=15) as r:
+        return json.load(r)
+
+
+# ---------------------------------------------------------------- kl run
+
+def cmd_run(args: argparse.Namespace) -> int:
+    spec = HARNESSES.get(args.harness, {"cmd": [args.harness], "env": ["kl", "openai"]})
+    if not shutil.which(spec["cmd"][0]):
+        die(f"'{spec['cmd'][0]}' is not installed or not on PATH")
+    cwd = os.path.realpath(args.dir or os.getcwd())
+    base_url = gateway_url() + "/v1"
+    sid = str(uuid.uuid4())
+    alias = f"kl-{os.path.basename(args.harness)}-{sid[:8]}"
+    repo = repo_id(cwd)
+
+    try:
+        made = gateway("/key/generate", {
+            "key_alias": alias,
+            "metadata": {"kl_session": sid, "kl_harness": args.harness, "kl_repo": repo or cwd},
+        })
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        die(f"could not create a key at {gateway_url()} ({e}). Is the gateway up? Try `make up`.")
+    key = made["key"]
+    # LiteLLM logs requests under the key's SHA-256, never the key itself.
+    key_hash = made.get("token") if made.get("token") != key else None
+    key_hash = key_hash or hashlib.sha256(key.encode()).hexdigest()
+
+    env = dict(os.environ, KL_SESSION_ID=sid, KL_API_KEY=key, KL_BASE_URL=base_url, KL_HOME=KL_HOME)
+    if "openai" in spec["env"]:
+        env.update(OPENAI_API_KEY=key, OPENAI_BASE_URL=base_url)
+    # Point git at kl's hooks for this process tree only; the repo is not changed.
+    n = int(env.get("GIT_CONFIG_COUNT") or 0)
+    env.update({"GIT_CONFIG_COUNT": str(n + 1), f"GIT_CONFIG_KEY_{n}": "core.hooksPath",
+                f"GIT_CONFIG_VALUE_{n}": HOOKS_DIR})
+
+    command = [part.format(base_url=base_url) for part in spec["cmd"]] + args.args
+    db = ledger()
+    db.execute(
+        "INSERT INTO sessions (id, harness, cwd, repo, command, key_hash, key_alias, parent_session,"
+        " parent_commit, pid, started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (sid, args.harness, cwd, repo, json.dumps(command), key_hash, alias, args.parent_session,
+         args.parent_commit, os.getpid(), now()),
+    )
+    db.commit()
+    print(f"kl: session {sid} ({alias})", file=sys.stderr)
+
+    code = 1
+    old = signal.signal(signal.SIGINT, signal.SIG_IGN)  # Ctrl-C belongs to the harness
+    try:
+        code = subprocess.call(command, cwd=cwd, env=env,
+                               preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+    finally:
+        signal.signal(signal.SIGINT, old)
+        db.execute("UPDATE sessions SET ended_at=?, exit_code=? WHERE id=?", (now(), code, sid))
+        db.commit()
+        try:  # The key was in the harness's environment; it stops working here.
+            gateway("/key/delete", {"keys": [key]})
+        except Exception as e:  # noqa: BLE001
+            print(f"kl: could not delete key {alias}: {e}", file=sys.stderr)
+        n = db.execute("SELECT count(*) FROM commits WHERE session_id=?", (sid,)).fetchone()[0]
+        print(f"kl: session {sid[:8]} ended, {n} commit(s) recorded", file=sys.stderr)
+    return code
+
+
+# ---------------------------------------------------------------- hooks
+
+def original_hook(name: str) -> str | None:
+    """The hook the repo would have run without kl, if there is one."""
+    top = git("rev-parse", "--show-toplevel") or os.getcwd()
+    dirs = [git("config", scope, "--get", key)
+            for scope, key in (("--local", "kl.origHooksPath"), ("--local", "core.hooksPath"),
+                               ("--global", "core.hooksPath"), ("--system", "core.hooksPath"))]
+    dirs.append(os.path.join(git("rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks"))
+    for d in dirs:
+        if not d:
+            continue
+        d = os.path.realpath(os.path.join(top, os.path.expanduser(d)))
+        if d == os.path.realpath(HOOKS_DIR):
+            continue
+        path = os.path.join(d, name)
+        return path if os.path.isfile(path) and os.access(path, os.X_OK) else None
+    return None
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, TypeError):
+        return False
+
+
+def current_session(db: sqlite3.Connection) -> tuple[str | None, str | None]:
+    """(session id, how it was found). The environment if the harness passed it
+    through; otherwise the one running session that was started in this repo."""
+    sid = os.environ.get("KL_SESSION_ID")
+    if sid:
+        return sid, "env"
+    repo = repo_id()
+    live = [r["id"] for r in db.execute("SELECT id, pid FROM sessions WHERE ended_at IS NULL AND repo=?", (repo,))
+            if alive(r["pid"])]
+    return (live[0], "path") if len(live) == 1 else (None, None)
+
+
+def rebasing() -> bool:
+    git_dir = git("rev-parse", "--absolute-git-dir")
+    return any(os.path.exists(os.path.join(git_dir, d)) for d in ("rebase-merge", "rebase-apply"))
+
+
+def add_trailer(msg_file: str) -> None:
+    if rebasing():
+        return  # replayed commits keep the session that wrote them
+    sid, _ = current_session(ledger())
+    if sid:
+        git("interpret-trailers", "--in-place", "--if-exists", "addIfDifferent",
+            "--trailer", f"{TRAILER}: {sid}", msg_file)
+
+
+def record_commit(db: sqlite3.Connection, sha: str, session: str | None, how: str | None,
+                  rewritten_from: str | None = None) -> None:
+    fields = git("show", "-s", "--format=%P%x00%cI%x00%s", sha).split("\x00")
+    if len(fields) != 3:
+        return
+    db.execute(
+        "INSERT OR IGNORE INTO commits (repo, sha, session_id, attribution, parents, branch, worktree,"
+        " subject, committed_at, recorded_at, rewritten_from) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (repo_id(), sha, session, how, fields[0], git("symbolic-ref", "--short", "-q", "HEAD"),
+         git("rev-parse", "--show-toplevel"), fields[2], fields[1], now(), rewritten_from),
+    )
+
+
+def kl_hook(name: str, argv: list, stdin: bytes) -> None:
+    if name == "prepare-commit-msg" and len(argv) > 1 and argv[1]:
+        add_trailer(argv[0])  # -m, -F, merge, amend: the message exists already
+    elif name == "commit-msg":
+        add_trailer(argv[0])  # message typed in an editor; a no-op if already there
+    elif name == "post-commit":
+        if rebasing():
+            return  # post-rewrite records replayed commits under their original session
+        db = ledger()
+        record_commit(db, git("rev-parse", "HEAD"), *current_session(db))
+        db.commit()
+    elif name == "post-rewrite":
+        db = ledger()
+        sid, how = current_session(db)
+        repo = repo_id()
+        for line in stdin.decode(errors="replace").splitlines():
+            old, new = line.split()[:2]
+            db.execute("INSERT INTO rewrites VALUES (?,?,?,?,?,?)", (repo, old, new, argv[0], sid, now()))
+            was = db.execute("SELECT session_id, attribution FROM commits WHERE repo=? AND sha=?", (repo, old)).fetchone()
+            record_commit(db, new, *(tuple(was) if was and was[0] else (sid, how)), rewritten_from=old)
+        db.commit()
+    elif name == "pre-push":
+        db = ledger()
+        sid, _ = current_session(db)
+        for line in stdin.decode(errors="replace").splitlines():
+            local_ref, sha, remote_ref = line.split()[:3]
+            db.execute("INSERT INTO pushes VALUES (?,?,?,?,?,?,?,?)",
+                       (repo_id(), argv[0], argv[1] if len(argv) > 1 else "", local_ref, sha, remote_ref, sid, now()))
+        db.commit()
+
+
+def cmd_hook(name: str, argv: list) -> int:
+    """Entry point for every file in kl/hooks. Runs the repo's own hook first and
+    returns its exit code; kl's part never fails or blocks a git command."""
+    stdin = sys.stdin.buffer.read() if name in ("pre-push", "post-rewrite") else b""
+    code = 0
+    try:
+        orig = original_hook(name)
+    except Exception:  # noqa: BLE001
+        orig = None
+    if orig:
+        code = subprocess.run([orig, *argv], input=stdin or None).returncode
+        if code:
+            return code
+    try:
+        kl_hook(name, argv, stdin)
+    except Exception as e:  # noqa: BLE001
+        print(f"kl: {name} hook: {e}", file=sys.stderr)
+    return code
+
+
+def cmd_hooks(args: argparse.Namespace) -> int:
+    cwd = os.path.realpath(args.repo or os.getcwd())
+    if not repo_id(cwd):
+        die(f"{cwd} is not a git repository")
+    current = git("config", "--local", "--get", "core.hooksPath", cwd=cwd)
+    ours = os.path.realpath(HOOKS_DIR)
+    installed = bool(current) and os.path.realpath(os.path.join(cwd, current)) == ours
+    if args.action == "install" and not installed:
+        if current:
+            git("config", "--local", "kl.origHooksPath", current, cwd=cwd, check=True)
+        git("config", "--local", "core.hooksPath", HOOKS_DIR, cwd=cwd, check=True)
+    elif args.action == "uninstall" and installed:
+        orig = git("config", "--local", "--get", "kl.origHooksPath", cwd=cwd)
+        if orig:
+            git("config", "--local", "core.hooksPath", orig, cwd=cwd, check=True)
+            git("config", "--local", "--unset", "kl.origHooksPath", cwd=cwd)
+        else:
+            git("config", "--local", "--unset", "core.hooksPath", cwd=cwd, check=True)
+    print(f"kl hooks {'installed on' if args.action == 'install' else 'removed from'} {cwd}")
+    return 0
+
+
+# ---------------------------------------------------------------- reports
+
+def table(rows: list, headers: list) -> None:
+    if not rows:
+        print("(none)")
+        return
+    rows = [headers] + [[("" if c is None else str(c)) for c in r] for r in rows]
+    widths = [max(len(r[i]) for r in rows) for i in range(len(headers) - 1)]
+    for r in rows:
+        print("  ".join([c.ljust(w) for c, w in zip(r, widths)] + [r[-1]]).rstrip())
+
+
+def cmd_log(args: argparse.Namespace) -> int:
+    cwd = os.path.realpath(args.path or os.getcwd())
+    repo = repo_id(cwd)
+    if not repo:
+        die(f"{cwd} is not a git repository")
+    out = git("log", f"-n{args.n}", f"--format=%H%x00%cI%x00%s%x00%(trailers:key={TRAILER},valueonly,separator=%x2C)",
+              cwd=cwd, check=True)
+    db = ledger()
+    rows = []
+    for line in filter(None, out.splitlines()):
+        sha, when, subject, trailer = line.split("\x00")
+        row = db.execute("SELECT session_id FROM commits WHERE repo=? AND sha=?", (repo, sha)).fetchone()
+        # The ledger is the record; the trailer covers commits it never saw (other machines, a lost ledger).
+        sid = (row["session_id"] if row else None) or trailer.split(",")[-1].strip() or None
+        s = db.execute("SELECT harness FROM sessions WHERE id=?", (sid,)).fetchone() if sid else None
+        rows.append([sha[:10], when[:16].replace("T", " "), sid[:8] if sid else "-", s["harness"] if s else "-", subject])
+    table(rows, ["COMMIT", "WHEN", "SESSION", "HARNESS", "SUBJECT"])
+    return 0
+
+
+def cmd_sessions(args: argparse.Namespace) -> int:
+    db = ledger()
+    rows = []
+    for s in db.execute("SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?", (args.n,)):
+        n = db.execute("SELECT count(*) FROM commits WHERE session_id=?", (s["id"],)).fetchone()[0]
+        state = "ended" if s["ended_at"] else ("running" if alive(s["pid"]) else "lost")
+        rows.append([s["id"][:8], s["started_at"][:16].replace("T", " "), state, s["harness"], n, s["repo"] or s["cwd"]])
+    table(rows, ["SESSION", "STARTED (UTC)", "STATE", "HARNESS", "COMMITS", "REPO"])
+    return 0
+
+
+def cmd_session(args: argparse.Namespace) -> int:
+    db = ledger()
+    s = find_session(db, args.id)
+    for k in ("id", "harness", "cwd", "repo", "command", "key_alias", "key_hash", "parent_session",
+              "parent_commit", "started_at", "ended_at", "exit_code"):
+        if s[k] is not None:
+            print(f"{k + ':':16}{s[k]}")
+    print("\nCommits")
+    table([[c["sha"][:10], c["committed_at"][:16].replace("T", " "), c["branch"] or "(detached)", c["subject"]]
+           for c in db.execute("SELECT * FROM commits WHERE session_id=? ORDER BY committed_at", (s["id"],))],
+          ["COMMIT", "WHEN", "BRANCH", "SUBJECT"])
+    print("\nGateway requests")
+    sql = ("select count(*) as requests, min(\"startTime\") as first, max(\"startTime\") as last,"
+           " sum(total_tokens) as tokens, round(sum(spend)::numeric, 4) as spend_usd,"
+           " count(distinct session_id) as gateway_sessions"
+           f" from \"LiteLLM_SpendLogs\" where api_key = '{s['key_hash']}'")
+    p = subprocess.run(["docker", "compose", "exec", "-T", "db", "psql", "-U", "litellm", "litellm", "-c", sql],
+                       cwd=STACK_DIR, capture_output=True, text=True)
+    print(p.stdout.rstrip() if p.returncode == 0 else f"(database not reachable: {p.stderr.strip().splitlines()[-1:]})")
+    return 0
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    print(SETUP[args.harness] % {"base_url": gateway_url() + "/v1"}, end="")
+    return 0
+
+
+def main() -> int:
+    if len(sys.argv) > 2 and sys.argv[1] == "hook":  # called by git, see kl/hooks/_hook
+        return cmd_hook(sys.argv[2], sys.argv[3:])
+
+    ap = argparse.ArgumentParser(prog="kl", description=__doc__.split("\n\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("run", help="start a harness as a tracked session")
+    p.add_argument("-C", dest="dir", help="start in this directory instead of the current one")
+    p.add_argument("--parent-session", help=argparse.SUPPRESS)
+    p.add_argument("--parent-commit", help=argparse.SUPPRESS)
+    p.add_argument("harness", help="pi, hermes, or any command")
+    p.add_argument("args", nargs=argparse.REMAINDER, help="passed to the harness")
+    p.set_defaults(fn=cmd_run)
+
+    p = sub.add_parser("log", help="commits with the session that made each")
+    p.add_argument("-n", type=int, default=20)
+    p.add_argument("path", nargs="?")
+    p.set_defaults(fn=cmd_log)
+
+    p = sub.add_parser("sessions", help="tracked sessions, newest first")
+    p.add_argument("-n", type=int, default=20)
+    p.set_defaults(fn=cmd_sessions)
+
+    p = sub.add_parser("session", help="one session with its commits and gateway requests")
+    p.add_argument("id", help="session id or a unique prefix")
+    p.set_defaults(fn=cmd_session)
+
+    p = sub.add_parser("setup", help="print the one-time config a harness needs")
+    p.add_argument("harness", choices=sorted(SETUP))
+    p.set_defaults(fn=cmd_setup)
+
+    p = sub.add_parser("hooks", help="keep kl's hooks on a repo outside `kl run`")
+    p.add_argument("action", choices=["install", "uninstall"])
+    p.add_argument("repo", nargs="?")
+    p.set_defaults(fn=cmd_hooks)
+
+    args = ap.parse_args()
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

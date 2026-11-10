@@ -104,13 +104,26 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
 
 ## Phases
 
-0. **Spikes.** Run Pi and Hermes against the gateway by hand. Record which headers
-   each sends, whether tool calling works with the intended models, and whether their
-   shell tools pass the environment through to git hooks.
-1. **Attribution.** `kl run`, key per session, hooks, ledger, `kl log` to list commits
-   with their sessions. Useful by itself.
-2. **Resume.** Snapshots, summariser, `kl resume <sha>`. Everything works from the CLI
-   at this point.
+0. **Spikes.** To do, on the Mac. Run Pi and Hermes against the gateway by hand.
+   Record which headers each sends, whether tool calling works with the intended
+   models, and whether their shell tools pass the environment through to git hooks.
+1. **Attribution.** Built: `kl run`, key per session, hooks, ledger, `kl log`,
+   `kl sessions`, `kl session`. Tested with `make kl-test` against a stand-in for the
+   gateway's key endpoints and a shell in place of a harness; not yet run against the
+   real gateway, Pi or Hermes. Differences from the design above:
+   - The hooks write to `~/.kl/ledger.sqlite` directly. There is no daemon yet, so no
+     spool file is needed; the daemon will read the same file.
+   - The hooks are not set in the repo's config. `kl run` points git at them through
+     `GIT_CONFIG_*` in the harness's environment, so only that process tree uses
+     them. `kl hooks install` sets `core.hooksPath` on a repo for harnesses that do
+     not pass their environment on (Hermes filters it; see `kl setup hermes`), and
+     the hooks then find the session by repo if exactly one is running there.
+   - The session's key is deleted when the harness exits. The ledger keeps its hash,
+     which is what the request logs are keyed on.
+   - Commits replayed by a rebase keep the session that wrote them. A new commit made
+     in the middle of a rebase is not recorded.
+2. **Resume.** Next. Snapshots, summariser, `kl resume <sha>`. Everything works from
+   the CLI at this point. Needs Postgres reachable from the host.
 3. **Daemon and manager agent.** Chat API with the read tools, then the resume tool.
 4. **UI tab.** Chat page, the patch, confirm dialog for resume.
 5. **Hardening.** Retention, upgrade check, backup of the ledger with `make backup`.

@@ -1,4 +1,4 @@
-.PHONY: init up down restart logs ps pull test cache prompt backup psql
+.PHONY: init up down restart logs ps pull test cache prompt backup psql kl-test
 
 init:      ## Create .env with generated secrets
 	./scripts/init-env.sh
@@ -40,3 +40,6 @@ backup:    ## Dump the database to backups/
 
 psql:
 	docker compose exec db psql -U litellm litellm
+
+kl-test:   ## Test the kl launcher, hooks and ledger (no gateway needed)
+	./kl/test.sh
