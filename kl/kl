@@ -124,6 +124,12 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def tilde(path: str) -> str:
+    """A path as people write it: ~/code/repo, not /Users/name/code/repo."""
+    home = os.path.realpath(os.path.expanduser("~"))
+    return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
+
+
 def die(msg: str) -> None:
     sys.exit(f"kl: {msg}")
 
@@ -711,7 +717,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
     if ".kl/" not in (open(exclude).read().split() if os.path.exists(exclude) else []):
         with open(exclude, "a") as f:  # keep the handoff out of the agent's commits
             f.write(".kl/\n")
-    print(f"kl: worktree {tree}\nkl: branch   {branch}\nkl: handoff  {os.path.join(tree, HANDOFF)}", file=sys.stderr)
+    print(f"kl: worktree {tilde(tree)}\nkl: branch   {branch}\nkl: handoff  {tilde(os.path.join(tree, HANDOFF))}", file=sys.stderr)
     if args.no_start:
         return 0
 
@@ -790,9 +796,7 @@ def cmd_sessions(args: argparse.Namespace) -> int:
     for s in db.execute("SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?", (args.n,)):
         n = db.execute("SELECT count(*) FROM commits WHERE session_id=?", (s["id"],)).fetchone()[0]
         state = "ended" if s["ended_at"] else ("running" if alive(s["pid"]) else "lost")
-        where, home = s["repo"] or s["cwd"], os.path.realpath(os.path.expanduser("~"))
-        where = "~" + where[len(home):] if where == home or where.startswith(home + os.sep) else where
-        rows.append([s["id"][:8], s["started_at"][:16].replace("T", " "), state, s["harness"], n, where])
+        rows.append([s["id"][:8], s["started_at"][:16].replace("T", " "), state, s["harness"], n, tilde(s["repo"] or s["cwd"])])
     table(rows, ["SESSION", "STARTED (UTC)", "STATE", "HARNESS", "COMMITS", "REPO"])
     return 0
 

@@ -11,7 +11,7 @@ docker-compose.yml). The UI ships as minified JS, so this rewrites it in place:
   - a "Final prompt" section shows what the model saw after its chat template,
     rendered by the `prompt` service (scripts/render-prompt.py)
 
-It also adds a "Cairn" entry to the sidebar, which shows the kl chat
+It also renames the UI to "Cairn-Gate" and adds a "Cairn" entry to the sidebar, which shows the kl chat
 page (see kl/ui/tab.js). That part does not rewrite LiteLLM's code: tab.js is
 appended to the script loader every page already loads, and works on the DOM.
 

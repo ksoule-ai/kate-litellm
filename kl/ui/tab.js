@@ -1,4 +1,5 @@
-// Adds a "Cairn" entry to the top of the LiteLLM admin UI's sidebar. Clicking it
+// Renames the LiteLLM admin UI to "Cairn-Gate" (logo, login page, browser tab) and
+// adds a "Cairn" entry to the top of its sidebar. Clicking the entry
 // shows the kl chat page (served by `kl serve` on this machine) over the UI's
 // content area. scripts/patch-ui.py appends this file to a script every UI page
 // loads; it touches only the page's DOM, nothing inside LiteLLM's own code.
@@ -52,6 +53,15 @@
       dark + L + " .kl-st-a{fill:#9c8b79}" + dark + L + " .kl-st-b{fill:#c7b49f}" + dark + L + " .kl-st-top{fill:#e07a4b}" +
       dark + L + ".kl-on{background:linear-gradient(135deg,#e07a4b 0%,#c2562b 100%)!important;border-color:#e07a4b;color:#1a120c!important}" +
       dark + L + ".kl-on .kl-st-a{fill:#5a3420}" + dark + L + ".kl-on .kl-st-b{fill:#7a4a30}" + dark + L + ".kl-on .kl-st-top{fill:#fff1e6}" +
+      // The Cairn-Gate name in place of the LiteLLM logo, and on the login page.
+      "aside[data-slot=sidebar] [data-slot=sidebar-header] a img{display:none!important}" +
+      ".kl-brand{display:inline-flex;align-items:center;gap:8px;color:var(--foreground,#0f172a);text-decoration:none;white-space:nowrap}" +
+      ".kl-brand svg{width:24px;height:24px;flex:none}" +
+      ".kl-brand b{font:600 18px/1 'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif;letter-spacing:.01em}" +
+      "aside[data-collapsed=true] .kl-brand b{display:none}" +
+      ".kl-brand.kl-big svg{width:34px;height:34px}.kl-brand.kl-big b{font-size:30px}" +
+      ".kl-brand .kl-st-a{fill:#8a7a6a}.kl-brand .kl-st-b{fill:#b19f8b}.kl-brand .kl-st-top{fill:#c2562b}" +
+      dark + ".kl-brand .kl-st-a{fill:#9c8b79}" + dark + ".kl-brand .kl-st-b{fill:#c7b49f}" + dark + ".kl-brand .kl-st-top{fill:#e07a4b}" +
       // While Cairn is open, the page underneath should not look selected.
       "body.kl-agents-open aside[data-slot=sidebar] nav a[data-active=true]:not(#" + LINK + ")" +
       "{background:transparent!important;opacity:.7}" +
@@ -59,6 +69,40 @@
       // The UI's floating "Press Ctrl K" hint sits where the chat's message box is.
       "body.kl-agents-open div.fixed.bottom-4.z-overlay{display:none!important}";
     document.head.appendChild(s);
+  }
+
+  var NAME = "Cairn-Gate";
+  var FAVICON = "data:image/svg+xml," + encodeURIComponent(ICON.replace(/class="kl-st-a"/g, 'fill="#8a7a6a"')
+    .replace(/class="kl-st-b"/g, 'fill="#b19f8b"').replace(/class="kl-st-top"/g, 'fill="#c2562b"'));
+
+  function mark_(big) {
+    var el = document.createElement("span");
+    el.className = "kl-brand" + (big ? " kl-big" : "");
+    el.innerHTML = ICON + "<b>" + NAME + "</b>";
+    return el;
+  }
+
+  // Show the Cairn-Gate name wherever the page shows LiteLLM's. The UI redraws these, so this runs on every change
+  // and does nothing when there is nothing left to rename.
+  function brand() {
+    addStyle();
+    if (document.title.indexOf("LiteLLM") >= 0) document.title = document.title.replace(/LiteLLM/g, NAME);
+    var icons = document.querySelectorAll('link[rel~="icon"]');
+    for (var i = 0; i < icons.length; i++) if (icons[i].getAttribute("href") !== FAVICON) icons[i].setAttribute("href", FAVICON);
+    var home = document.querySelector('aside[data-slot="sidebar"] [data-slot="sidebar-header"] a[href]');
+    if (home && home.querySelector("img") && !home.querySelector(".kl-brand")) {
+      home.appendChild(mark_(false));
+      home.setAttribute("aria-label", NAME + " home");
+    }
+    if (/\/login\/?$/.test(location.pathname)) {
+      var texts = document.querySelectorAll("h1, h2, p");
+      for (var j = 0; j < texts.length; j++) {
+        var t = texts[j];
+        if (t.children.length || t.textContent.indexOf("LiteLLM") < 0) continue;
+        if (/^H[12]$/.test(t.tagName)) { t.textContent = ""; t.appendChild(mark_(true)); }
+        else t.textContent = t.textContent.replace(/LiteLLM Admin UI/g, NAME + " admin UI").replace(/LiteLLM/g, NAME);
+      }
+    }
   }
 
   // The entry is a copy of one of the sidebar's own links, so it looks and collapses like them.
@@ -169,6 +213,7 @@
     queued = true;
     requestAnimationFrame(function () {
       queued = false;
+      brand();
       addLink();
       watchMain();
       if (open) { place(); sendTheme(); }
@@ -176,6 +221,7 @@
   }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "data-collapsed"] });
 
   function start() {
+    brand();
     addLink();
     if (location.hash === HASH) {
       var tries = 0, wait = setInterval(function () {  // on a reload, open once the sidebar exists

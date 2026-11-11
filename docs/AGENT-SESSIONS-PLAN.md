@@ -233,6 +233,9 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
    - **Renamed Cairn**, with a stacked-rocks icon. The entry sits at the top of the
      sidebar as a terracotta card, and the page uses its own warm stone palette and
      serif headings, so it does not read as one of LiteLLM's pages.
+   - **The admin UI is renamed Cairn-Gate** by the same script: the sidebar logo, the
+     login page, the browser tab title and the favicon. LiteLLM's version badge and
+     its Docs and Blog links are left as they are.
    - **`kl serve` is a separate process on the host** and has to be started by hand.
      The tab says so when it is not running.
 5. **Hardening.** Retention, upgrade check, backup of the ledger with `make backup`.

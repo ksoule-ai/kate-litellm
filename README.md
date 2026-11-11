@@ -108,7 +108,9 @@ under its answers: check a small model's answers against that, because small mod
 misreport. In testing, Granite 4.1 8B answered every test question correctly, Qwen 2.5
 7B nearly all, and a 3B model invented details; use 7B or larger.
 
-The same agent is in the admin UI as **Cairn**, the terracotta entry with a stack
+The admin UI itself is renamed **Cairn-Gate** (logo, login page, browser tab); it is
+still LiteLLM underneath, and its version badge still says which. The same agent is
+in it as **Cairn**, the terracotta entry with a stack
 of rocks at the top of the sidebar. The tab shows a page served from your machine, so keep this running in a
 terminal:
 
