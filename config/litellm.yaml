@@ -68,7 +68,7 @@ model_list:
       api_base: http://host.docker.internal:11434
       num_ctx: 16384
 
-  # The manager agent behind `kl chat` and the Agent Sessions tab.
+  # The manager agent behind `kl chat` and the Cairn tab.
   - model_name: kl-manager
     litellm_params:
       model: os.environ/KL_LOCAL_MODEL

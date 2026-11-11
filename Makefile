@@ -41,7 +41,7 @@ backup:    ## Dump the database to backups/
 psql:
 	docker compose exec db psql -U litellm litellm
 
-serve:     ## Run the session manager behind the UI's Agent Sessions tab (stays in the foreground)
+serve:     ## Run the session manager behind the UI's Cairn tab (stays in the foreground)
 	./kl/kl serve
 
 kl-test:   ## Test the kl launcher, hooks and ledger (no gateway needed)

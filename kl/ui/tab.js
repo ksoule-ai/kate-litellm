@@ -1,15 +1,18 @@
-// Adds an "Agent Sessions" entry to the LiteLLM admin UI's sidebar. Clicking it
+// Adds a "Cairn" entry to the top of the LiteLLM admin UI's sidebar. Clicking it
 // shows the kl chat page (served by `kl serve` on this machine) over the UI's
 // content area. scripts/patch-ui.py appends this file to a script every UI page
 // loads; it touches only the page's DOM, nothing inside LiteLLM's own code.
 (function () {
   if (window.__klAgentsTab) return;
   window.__klAgentsTab = true;
-  var PORT = "__KL_PORT__", HASH = "#agent-sessions", LINK = "kl-agents-link", PANEL = "kl-agents-panel";
+  var PORT = "__KL_PORT__", HASH = "#cairn", LINK = "kl-agents-link", PANEL = "kl-agents-panel";
   var url = "http://" + location.hostname + ":" + PORT + "/";
-  var ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
-    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><path d="M6 9v12"/>' +
-    '<circle cx="18" cy="9" r="3"/><path d="M18 12a6 6 0 0 1-6 6H6"/></svg>';
+  // A little stack of rocks. Its colours come from the stylesheet below, so they can change when the entry is selected.
+  var ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">' +
+    '<path class="kl-st-a" d="M3.6 19.6c0-1.7 3.6-2.9 8.2-2.9 4.7 0 8.6 1.1 8.6 2.8 0 1.6-3.8 2.7-8.5 2.7-4.6 0-8.3-1-8.3-2.6z"/>' +
+    '<path class="kl-st-b" d="M5.9 14.7c.2-1.5 2.8-2.6 6-2.5 3.3.1 5.9 1.1 5.8 2.6-.1 1.4-2.8 2.3-6.1 2.2-3.3-.1-5.9-1-5.7-2.3z"/>' +
+    '<path class="kl-st-a" d="M8.2 10.1c.2-1.2 2-2 4.2-1.9 2.3.1 4 .9 3.9 2.1-.1 1.1-1.9 1.8-4.2 1.7-2.3-.1-4-.8-3.9-1.9z"/>' +
+    '<path class="kl-st-top" d="M9.9 6.1c.1-.9 1.2-1.5 2.5-1.4 1.4.1 2.4.7 2.3 1.6-.1.8-1.2 1.3-2.5 1.2-1.4-.1-2.4-.6-2.3-1.4z"/></svg>';
   var open = false, panel = null, frame = null;
 
   function nav() { return document.querySelector('aside[data-slot="sidebar"] nav'); }
@@ -21,14 +24,35 @@
     var s = document.createElement("style");
     s.id = "kl-agents-style";
     // While the tab is open, the page underneath should not look selected.
+    var L = "aside[data-slot=sidebar] nav #" + LINK, dark = "html.dark ";
     s.textContent =
-      "#" + PANEL + "{position:fixed;z-index:20;background:var(--background,#fff);display:none}" +
+      // The panel the page is shown in, in Cairn's own colours so nothing flashes white while it loads.
+      "#" + PANEL + "{position:fixed;z-index:20;background:#faf6ef;display:none}" +
+      dark + "#" + PANEL + "{background:#17130f}" +
       "#" + PANEL + " iframe{width:100%;height:100%;border:0;display:block}" +
-      "#" + PANEL + " .kl-down{font:14px/1.5 system-ui,sans-serif;max-width:460px;margin:10vh auto 0;padding:24px;" +
-      "border:1px solid var(--border,#e2e8f0);border-radius:10px;color:var(--foreground,#0f172a)}" +
-      "#" + PANEL + " .kl-down code{font-family:ui-monospace,Menlo,monospace;background:var(--muted,#f1f5f9);padding:1px 5px;border-radius:4px}" +
-      "#" + PANEL + " .kl-down button{margin-top:12px;padding:7px 14px;border-radius:6px;border:1px solid var(--border,#e2e8f0);" +
-      "background:transparent;color:inherit;cursor:pointer;font:inherit}" +
+      "#" + PANEL + " .kl-down{font:14px/1.55 system-ui,sans-serif;max-width:460px;margin:10vh auto 0;padding:28px;" +
+      "border:1px solid #e8dccb;border-radius:14px;background:#fffdf9;color:#2f2721}" +
+      dark + "#" + PANEL + " .kl-down{border-color:#3a3027;background:#1f1a15;color:#efe6da}" +
+      "#" + PANEL + " .kl-down strong{display:block;font:600 20px/1.2 'Iowan Old Style',Palatino,Georgia,serif;margin-bottom:6px}" +
+      "#" + PANEL + " .kl-down code{font-family:ui-monospace,Menlo,monospace;background:rgba(138,122,106,.15);padding:1px 5px;border-radius:4px}" +
+      "#" + PANEL + " .kl-down button{margin-top:12px;padding:7px 14px;border-radius:8px;border:1px solid #c2562b;" +
+      "background:#c2562b;color:#fffaf4;cursor:pointer;font:inherit;font-weight:500}" +
+      // The sidebar entry: a terracotta card at the top of the sidebar, unlike any of LiteLLM's grey entries.
+      L + "{height:42px!important;margin:10px 0 6px;border:1px solid #ecc9ad;border-radius:10px;" +
+      "background:linear-gradient(135deg,#fdf1e6 0%,#f5dcc6 100%)!important;color:#8a3a17!important;font-weight:600;" +
+      "font-size:14px;letter-spacing:.01em;box-shadow:0 1px 2px rgba(122,58,23,.12);opacity:1!important}" +
+      L + ":hover{background:linear-gradient(135deg,#fbe6d4 0%,#efcbae 100%)!important;border-color:#e2b38f}" +
+      L + " svg{width:20px!important;height:20px!important}" +
+      L + " .kl-st-a{fill:#8a7a6a}" + L + " .kl-st-b{fill:#b19f8b}" + L + " .kl-st-top{fill:#c2562b}" +
+      L + ".kl-on{background:linear-gradient(135deg,#cf6435 0%,#a9461f 100%)!important;border-color:#a9461f;color:#fffaf4!important;" +
+      "box-shadow:0 2px 6px rgba(169,70,31,.35)}" +
+      L + ".kl-on .kl-st-a{fill:#f3dccb}" + L + ".kl-on .kl-st-b{fill:#fffaf4}" + L + ".kl-on .kl-st-top{fill:#ffd2b8}" +
+      dark + L + "{border-color:#5c3a26;background:linear-gradient(135deg,#3a2519 0%,#2b1b12 100%)!important;color:#f2b48f!important;box-shadow:none}" +
+      dark + L + ":hover{background:linear-gradient(135deg,#462d1e 0%,#331f15 100%)!important}" +
+      dark + L + " .kl-st-a{fill:#9c8b79}" + dark + L + " .kl-st-b{fill:#c7b49f}" + dark + L + " .kl-st-top{fill:#e07a4b}" +
+      dark + L + ".kl-on{background:linear-gradient(135deg,#e07a4b 0%,#c2562b 100%)!important;border-color:#e07a4b;color:#1a120c!important}" +
+      dark + L + ".kl-on .kl-st-a{fill:#5a3420}" + dark + L + ".kl-on .kl-st-b{fill:#7a4a30}" + dark + L + ".kl-on .kl-st-top{fill:#fff1e6}" +
+      // While Cairn is open, the page underneath should not look selected.
       "body.kl-agents-open aside[data-slot=sidebar] nav a[data-active=true]:not(#" + LINK + ")" +
       "{background:transparent!important;opacity:.7}" +
       "body.kl-agents-open aside[data-slot=sidebar] nav a[data-active=true]:not(#" + LINK + ")::before{display:none!important}" +
@@ -42,13 +66,12 @@
     var n = nav();
     if (!n || document.getElementById(LINK)) return;
     var links = n.querySelectorAll("a[href]");
-    var after = null, model = null;
-    for (var i = 0; i < links.length; i++) {
-      if (/\/logs\/?$/.test(links[i].getAttribute("href"))) after = links[i];
-      if (!model && links[i].getAttribute("data-active") !== "true") model = links[i];
+    var model = null;
+    for (var i = 0; i < links.length && !model; i++) {
+      if (links[i].getAttribute("data-active") !== "true") model = links[i];
     }
     if (!model) return;
-    after = after || links[links.length - 1];
+    addStyle();
     var a = model.cloneNode(true);
     a.id = LINK;
     a.setAttribute("href", HASH);
@@ -56,11 +79,11 @@
     var svg = a.querySelector("svg");
     if (svg) svg.outerHTML = ICON;
     var spans = a.querySelectorAll("span");
-    for (var j = 0; j < spans.length; j++) { if (j === 0) spans[j].textContent = "Agent Sessions"; else spans[j].remove(); }
-    if (!spans.length) a.appendChild(document.createTextNode("Agent Sessions"));
-    a.title = "Agent Sessions";
+    for (var j = 0; j < spans.length; j++) { if (j === 0) spans[j].textContent = "Cairn"; else spans[j].remove(); }
+    if (!spans.length) a.appendChild(document.createTextNode("Cairn"));
+    a.title = "Cairn: your agent sessions";
     a.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); toggle(!open); });
-    after.parentNode.insertBefore(a, after.nextSibling);
+    n.insertBefore(a, n.firstChild);
     mark();
   }
 
@@ -68,8 +91,7 @@
     var a = document.getElementById(LINK);
     if (!a) return;
     if (open) a.setAttribute("data-active", "true"); else a.removeAttribute("data-active");
-    a.style.background = open ? "var(--sidebar-accent, rgba(0,0,0,.06))" : "";
-    a.style.color = open ? "var(--sidebar-accent-foreground, inherit)" : "";
+    a.classList.toggle("kl-on", open);
   }
 
   function place() {
@@ -85,7 +107,7 @@
     // The page comes from another port, so a failed load cannot be seen from here. Ask first.
     fetch(url, { mode: "no-cors", cache: "no-store" }).then(function () {
       frame = document.createElement("iframe");
-      frame.title = "Agent Sessions";
+      frame.title = "Cairn";
       frame.src = url + "?theme=" + theme();
       frame.addEventListener("load", sendTheme);
       panel.appendChild(frame);
@@ -93,7 +115,7 @@
       frame = null;
       var d = document.createElement("div");
       d.className = "kl-down";
-      d.innerHTML = "<strong>Session manager not running</strong><p>Start it in a terminal with <code>kl serve</code>, then try again.</p>";
+      d.innerHTML = "<strong>Cairn is not running</strong><p>Start it in a terminal with <code>kl serve</code>, then try again.</p>";
       var b = document.createElement("button");
       b.textContent = "Try again";
       b.addEventListener("click", load);
@@ -130,6 +152,15 @@
   }, true);
   document.addEventListener("keydown", function (e) { if (open && e.key === "Escape") toggle(false); });
   window.addEventListener("resize", place);
+  // The sidebar animates its width when collapsed or expanded: follow the content area as it changes size.
+  var watched = null, sizes = window.ResizeObserver ? new ResizeObserver(function () { if (open) place(); }) : null;
+  function watchMain() {
+    var m = main();
+    if (!sizes || !m || m === watched) return;
+    if (watched) sizes.unobserve(watched);
+    sizes.observe(m);
+    watched = m;
+  }
 
   // The UI redraws its sidebar as you move around: put the entry back when it goes, and follow layout and theme changes.
   var queued = false;
@@ -139,6 +170,7 @@
     requestAnimationFrame(function () {
       queued = false;
       addLink();
+      watchMain();
       if (open) { place(); sendTheme(); }
     });
   }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "data-collapsed"] });

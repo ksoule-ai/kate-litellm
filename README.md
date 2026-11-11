@@ -106,8 +106,8 @@ under its answers: check a small model's answers against that, because small mod
 misreport. In testing, Granite 4.1 8B answered every test question correctly, Qwen 2.5
 7B nearly all, and a 3B model invented details; use 7B or larger.
 
-The same agent is in the admin UI as the **Agent Sessions** tab, under Logs in the
-sidebar. The tab shows a page served from your machine, so keep this running in a
+The same agent is in the admin UI as **Cairn**, the terracotta entry with a stack
+of rocks at the top of the sidebar. The tab shows a page served from your machine, so keep this running in a
 terminal:
 
 ```sh
@@ -139,7 +139,7 @@ Design and status: [docs/AGENT-SESSIONS-PLAN.md](docs/AGENT-SESSIONS-PLAN.md).
 | `make logs` | Follow gateway logs |
 | `make cache` | Cached vs uncached token report |
 | `make prompt ID=…` | Final prompt the model saw for a logged request |
-| `make serve` | Run the session manager behind the Agent Sessions tab |
+| `make serve` | Run the session manager behind the Cairn tab |
 | `make backup` | Dump the database to `backups/` |
 | `make psql` | Open a SQL shell on the database |
 

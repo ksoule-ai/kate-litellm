@@ -11,7 +11,7 @@ docker-compose.yml). The UI ships as minified JS, so this rewrites it in place:
   - a "Final prompt" section shows what the model saw after its chat template,
     rendered by the `prompt` service (scripts/render-prompt.py)
 
-It also adds an "Agent Sessions" entry to the sidebar, which shows the kl chat
+It also adds a "Cairn" entry to the sidebar, which shows the kl chat
 page (see kl/ui/tab.js). That part does not rewrite LiteLLM's code: tab.js is
 appended to the script loader every page already loads, and works on the DOM.
 
@@ -132,7 +132,7 @@ def add_tab(chunks_dir):
         tab = f.read().replace("__KL_PORT__", KL_PORT)
     loaders = glob.glob(os.path.join(chunks_dir, "turbopack-*.js"))
     if len(loaders) != 1:
-        print("patch-ui: WARNING script loader not found; Agent Sessions tab not added")
+        print("patch-ui: WARNING script loader not found; Cairn tab not added")
         return
     with open(loaders[0], encoding="utf-8") as f:
         src = f.read()
@@ -140,7 +140,7 @@ def add_tab(chunks_dir):
         src = src[:src.index(TAB_START)] + src[src.index(TAB_END) + len(TAB_END):]
     with open(loaders[0], "w", encoding="utf-8") as f:
         f.write(src + TAB_START + tab + TAB_END)
-    print(f"patch-ui: added Agent Sessions tab to {os.path.basename(loaders[0])}")
+    print(f"patch-ui: added Cairn tab to {os.path.basename(loaders[0])}")
 
 
 def main():
@@ -148,7 +148,7 @@ def main():
     try:
         add_tab(chunks_dir)
     except Exception as e:  # the log viewer patch below does not depend on this
-        print(f"patch-ui: WARNING Agent Sessions tab not added: {e}")
+        print(f"patch-ui: WARNING Cairn tab not added: {e}")
     targets = []
     for path in glob.glob(os.path.join(chunks_dir, "*.js")):
         with open(path, encoding="utf-8") as f:

@@ -700,7 +700,7 @@ def cmd_serve(core, args) -> int:
             emit({"type": "done", "waiting_for_confirmation": bool(agent.pending)})
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print(f"kl: session manager on http://localhost:{args.port} (model {MODEL}); in the gateway UI it is the Agent Sessions tab\n"
+    print(f"kl: session manager on http://localhost:{args.port} (model {MODEL}); in the gateway UI it is the Cairn tab\n"
           f"kl: open this link once to connect your browser: http://localhost:{args.port}/#token={token}\n"
           f"kl: or paste this token into the tab: {token}", file=sys.stderr)
     try:
