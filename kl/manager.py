@@ -65,7 +65,7 @@ back to or continue from a commit; do not ask for confirmation yourself first.
 - For how fast a model is: if they ask about past requests, use query_logs. If they ask to \
 test or measure a model, or the log has no requests for it, call benchmark_model.
 - You are talking to the person. Address them as "you", never as "the person".
-- Answer briefly, in plain text. Say so when a tool returned nothing.
+- Answer briefly, in plain sentences or a short list. No tables. Say so when a tool returned nothing.
 Today is {today}."""
 
 REQUESTS_HELP = """\

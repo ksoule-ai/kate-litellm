@@ -790,7 +790,9 @@ def cmd_sessions(args: argparse.Namespace) -> int:
     for s in db.execute("SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?", (args.n,)):
         n = db.execute("SELECT count(*) FROM commits WHERE session_id=?", (s["id"],)).fetchone()[0]
         state = "ended" if s["ended_at"] else ("running" if alive(s["pid"]) else "lost")
-        rows.append([s["id"][:8], s["started_at"][:16].replace("T", " "), state, s["harness"], n, s["repo"] or s["cwd"]])
+        where, home = s["repo"] or s["cwd"], os.path.realpath(os.path.expanduser("~"))
+        where = "~" + where[len(home):] if where == home or where.startswith(home + os.sep) else where
+        rows.append([s["id"][:8], s["started_at"][:16].replace("T", " "), state, s["harness"], n, where])
     table(rows, ["SESSION", "STARTED (UTC)", "STATE", "HARNESS", "COMMITS", "REPO"])
     return 0
 
