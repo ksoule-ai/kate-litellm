@@ -26,6 +26,12 @@ class H(BaseHTTPRequestHandler):
         with open(T + "/gateway.log", "a") as f:
             f.write(json.dumps({"path": self.path, "auth": self.headers["Authorization"], "body": body}) + "\n")
         out = {"key": "sk-session-" + body.get("key_alias", "")}
+        if body.get("stream"):  # a benchmark request: three pieces of text, then the token count
+            self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
+            for piece in ("A commit ", "is a ", "snapshot."):
+                self.wfile.write(b"data: " + json.dumps({"choices": [{"delta": {"content": piece}}]}).encode() + b"\n\n"); self.wfile.flush()
+            self.wfile.write(b"data: " + json.dumps({"choices": [], "usage": {"completion_tokens": 40}}).encode() + b"\n\ndata: [DONE]\n\n")
+            return
         if body.get("model") == "kl-manager":  # a scripted model for the manager agent: one tool call, then an answer
             last = body["messages"][-1]
             words = (last.get("content") or "").split(" ", 1)
@@ -34,6 +40,7 @@ class H(BaseHTTPRequestHandler):
                     "git:": ("git", {"repo": "repo", "command": words[-1]}),
                     "read:": ("read_file", {"repo": "repo", "path": words[-1]}),
                     "sql:": ("query_logs", {"sql": words[-1]}),
+                    "bench:": ("benchmark_model", {"model": words[-1], "runs": 2}),
                     "resume": ("resume_from_commit", dict(zip(("repo", "commit", "harness"), words[-1].split())))}.get(words[0])
             msg = {"role": "assistant", "content": "ANSWER: " + (last.get("content") or "")}
             if last["role"] == "user" and words[0] == "textcall":  # a small model writing the call as text
@@ -49,6 +56,10 @@ class H(BaseHTTPRequestHandler):
         out = json.dumps(out).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
         self.wfile.write(out)
+    def do_GET(self):  # which models the gateway serves, and from where
+        out = json.dumps({"data": [{"model_name": "local-m", "litellm_params": {"api_base": "http://host.docker.internal:11434"}},
+                                   {"model_name": "hosted/*", "litellm_params": {}}]}).encode()
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(out)
     def log_message(self, *a): pass
 s = HTTPServer(("127.0.0.1", 0), H)
 open(T + "/port", "w").write(str(s.server_port))
@@ -191,6 +202,12 @@ check "resume without a yes does nothing"      'chat "resume repo $FIRST true" |
 check "resume shows what will happen"          'chat "resume repo $FIRST true" | grep -q "at commit ${FIRST:0:10} (\"first in session\")"'
 check "resume with a yes starts a session"     'chat --yes "resume repo $FIRST true" | grep -q "kl: worktree" && [[ "$(ls "$T/repo-kl" | wc -l)" == "$((N + 1))" ]]'
 check "resume of an unknown commit: no prompt" '! chat --yes "resume repo deadbeef true" | grep -q "Go ahead"'
+
+# Benchmarks: a local model is measured straight away, a hosted one only after a yes.
+check "benchmark of a local model just runs"   'chat "bench: local-m" > "$T/b"; grep -q "benchmark of local-m (local); 2 runs" "$T/b" && grep -q "run=2; first_token_s=.*output_tokens=40; tokens_per_second=" "$T/b" && grep -q "median:" "$T/b" && ! grep -q "Go ahead" "$T/b"'
+check "benchmark of a hosted model asks first" 'chat "bench: hosted/big" > "$T/b"; grep -q "not a local model" "$T/b" && grep -q "The person declined" "$T/b" && ! grep -q "run=1" "$T/b"'
+check "benchmark of a hosted model with a yes" 'chat --yes "bench: hosted/big" | grep -q "benchmark of hosted/big (hosted)"'
+check "benchmark of an unknown model: no run"  'chat --yes "bench: nosuch" > "$T/b"; grep -q "does not serve a model named" "$T/b" && ! grep -q "Go ahead" "$T/b"'
 
 # The local API: token, Host and Origin are all checked.
 PORT=$((20000 + RANDOM % 20000))

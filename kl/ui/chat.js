@@ -103,7 +103,7 @@
           card.replaceChildren(el("p", "", e.summary), el("p", "muted", approve ? "You approved this." : "You declined this."));
           run("/api/confirm", { conversation, approve }, turn);
         };
-        const yes = buttons.appendChild(el("button", "primary", "Start session"));
+        const yes = buttons.appendChild(el("button", "primary", e.button || "Go ahead"));
         const no = buttons.appendChild(el("button", "", "Decline"));
         yes.type = no.type = "button";
         yes.addEventListener("click", () => answer(true));

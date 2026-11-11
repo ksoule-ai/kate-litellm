@@ -171,6 +171,11 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
    - **Tools:** `list_repos`, `list_sessions`, `get_session`, `list_commits`,
      `get_commit`, `get_conversation`, `query_logs`, `git`, `read_file`, and
      `resume_from_commit`. All read-only except the last.
+   - **`benchmark_model`** (added later) sends a short fixed prompt through the
+     gateway and reports seconds to first token and tokens per second per run. It
+     runs at once for a local model and asks first for a hosted one. The log view
+     also gained `first_token_ms`. Granite 4.1 8B measured itself at a median 0.26 s
+     to first token and 4.3 tokens per second on 4 CPU cores.
    - **Resume always asks.** What the person is shown is worked out from the tool's
      arguments, not from the model's words. One request per message: in testing the
      3B model called it five times unprompted on an unrelated question, and each was

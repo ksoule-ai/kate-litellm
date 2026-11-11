@@ -97,11 +97,13 @@ kl chat "which session made the last commit in my-repo, and what was it asked to
 ```
 
 It can list sessions and commits, read the conversation behind a commit, query the
-request log with SQL, read your repos with git, and start a `kl resume` for you. It
+request log with SQL, read your repos with git, measure how fast a model is, and
+start a `kl resume` for you. It
 runs on a local Ollama model, as do the handoff summaries: set `KL_LOCAL_MODEL` in
 `.env` to one you have pulled that supports tools, then `make restart`. Nothing kl
 reads (conversations, logs, repo contents) is sent off this machine. Everything it can do is read-only except
-starting a resume, which always asks you first. It shows what each tool returned
+starting a resume and speed-testing a hosted model (which costs money); both always
+ask you first. Speed-testing a local model just runs. It shows what each tool returned
 under its answers: check a small model's answers against that, because small models
 misreport. In testing, Granite 4.1 8B answered every test question correctly, Qwen 2.5
 7B nearly all, and a 3B model invented details; use 7B or larger.
