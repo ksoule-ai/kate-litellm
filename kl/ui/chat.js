@@ -55,8 +55,10 @@
   // Models write **bold** and `code`. Show those two, built as elements, and everything else as plain text.
   const rich = (cls, text) => {
     const node = el("div", cls);
-    text.split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/).forEach((part) => {
-      if (/^\*\*.+\*\*$/.test(part)) node.appendChild(el("strong", "", part.slice(2, -2)));
+    text.split(/(```[a-z]*\n[\s\S]*?```|\*\*[^*\n]+\*\*|`[^`\n]+`)/).forEach((part) => {
+      const block = /^```[a-z]*\n([\s\S]*?)\n?```$/.exec(part);
+      if (block) node.appendChild(el("pre", "block", block[1]));
+      else if (/^\*\*.+\*\*$/.test(part)) node.appendChild(el("strong", "", part.slice(2, -2)));
       else if (/^`.+`$/.test(part)) node.appendChild(el("code", "", part.slice(1, -1)));
       else if (part) node.appendChild(document.createTextNode(part));
     });
@@ -160,7 +162,26 @@
     $("input").style.height = "";
     $("input").style.height = Math.min($("input").scrollHeight + 2, 160) + "px";
   });
-  $("suggestions").addEventListener("click", (e) => { if (e.target.tagName === "BUTTON") ask(e.target.textContent); });
+  $("suggestions").addEventListener("click", (e) => {
+    if (e.target.tagName !== "BUTTON") return;
+    const fill = e.target.dataset.fill;
+    if (!fill) return ask(e.target.textContent);
+    // An example with blanks: put it in the message box with the first blank selected, ready to type over.
+    const input = $("input");
+    input.value = fill;
+    input.dispatchEvent(new Event("input"));
+    input.focus();
+    const blank = /\[[^\]]+\]/.exec(fill);
+    if (blank) input.setSelectionRange(blank.index, blank.index + blank[0].length);
+  });
+  // Tab jumps to the next blank of a filled-in example.
+  $("input").addEventListener("keydown", (e) => {
+    if (e.key !== "Tab" || e.shiftKey) return;
+    const input = $("input"), rest = input.value.slice(input.selectionEnd), blank = /\[[^\]]+\]/.exec(rest);
+    if (!blank) return;
+    e.preventDefault();
+    input.setSelectionRange(input.selectionEnd + blank.index, input.selectionEnd + blank.index + blank[0].length);
+  });
   $("new").addEventListener("click", () => {
     if (busy) return;
     conversation = store("sessionStorage", "kl.conversation", null) || "";

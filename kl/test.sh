@@ -41,7 +41,7 @@ class H(BaseHTTPRequestHandler):
                     "read:": ("read_file", {"repo": "repo", "path": words[-1]}),
                     "sql:": ("query_logs", {"sql": words[-1]}),
                     "bench:": ("benchmark_model", {"model": words[-1], "runs": 2}),
-                    "resume": ("resume_from_commit", dict(zip(("repo", "commit", "harness"), words[-1].split())))}.get(words[0])
+                    "resume": ("resume_from_commit", dict(zip(("repo", "commit", "harness", "model"), words[-1].split())))}.get(words[0])
             msg = {"role": "assistant", "content": "ANSWER: " + (last.get("content") or "")}
             if last["role"] == "user" and words[0] == "textcall":  # a small model writing the call as text
                 msg["content"] = 'I will look. {"name": "list_repos", "arguments": {}}'
@@ -201,6 +201,10 @@ N="$(ls "$T/repo-kl" | wc -l)"
 check "resume without a yes does nothing"      'chat "resume repo $FIRST true" | grep -q "The person declined" && [[ "$(ls "$T/repo-kl" | wc -l)" == "$N" ]]'
 check "resume shows what will happen"          'chat "resume repo $FIRST true" | grep -q "at commit ${FIRST:0:10} (\"first in session\")"'
 check "resume with a yes starts a session"     'chat --yes "resume repo $FIRST true" | grep -q "kl: worktree" && [[ "$(ls "$T/repo-kl" | wc -l)" == "$((N + 1))" ]]'
+check "resume names the model it will use"     'chat "resume repo $FIRST pi local-m" | grep -q "Start a new pi session, running on local-m (local model) in a new worktree"'
+check "resume with an unknown model: no prompt" 'chat --yes "resume repo $FIRST pi nosuch" > "$T/b"; grep -q "does not serve a model named" "$T/b" && ! grep -q "Go ahead" "$T/b"'
+check "kl resume --model: harness gets its flag" 'printf "#!/bin/sh\necho \"\$@\" > \"$T/pi-args\"\n" > "$T/pi" && chmod +x "$T/pi" && PATH="$T:$PATH" "$KL" resume --fg --harness pi --model local-m "$FIRST" 2>/dev/null; grep -q "^--model kl/local-m Read .kl/HANDOFF.md" "$T/pi-args" && [[ "$(sql "select model from sessions where harness=\"pi\" order by started_at desc limit 1")" == local-m ]]'
+check "kl resume --model: unknown harness says so" '! "$KL" resume --fg --harness true --model local-m "$FIRST" 2>"$T/err" && grep -q "does not know how to tell" "$T/err"'
 check "resume of an unknown commit: no prompt" '! chat --yes "resume repo deadbeef true" | grep -q "Go ahead"'
 
 # Benchmarks: a local model is measured straight away, a hosted one only after a yes.
@@ -227,6 +231,7 @@ check "page may only be framed by the gateway" 'api -D - -o /dev/null $U/ | grep
 check "page is not served under another Host" '[[ "$(api -o /dev/null -w "%{http_code}" -H "Host: evil.example" $U/)" == 403 ]]'
 check "no other files are served"             '[[ "$(api -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" $U/manager.py)" == 404 && "$(api -o /dev/null -w "%{http_code}" --path-as-is $U/../kl)" != 200 ]]'
 check "API: chat streams the steps"            'api -H "Authorization: Bearer $TOKEN" -d "{\"message\": \"sessions\"}" $U/api/chat > "$T/chat.out" && grep -q "\"type\": \"tool\", \"name\": \"list_sessions\"" "$T/chat.out" && grep -q "\"type\": \"text\"" "$T/chat.out" && tail -1 "$T/chat.out" | grep -q "\"waiting_for_confirmation\": false"'
+N="$(($(ls "$T/repo-kl" | wc -l) - 1))"
 api -H "Authorization: Bearer $TOKEN" -d "{\"conversation\": \"c1\", \"message\": \"resume repo $FIRST true\"}" $U/api/chat > "$T/chat.out"
 check "API: resume waits for confirmation"     'grep -q "\"type\": \"confirm\"" "$T/chat.out" && tail -1 "$T/chat.out" | grep -q "\"waiting_for_confirmation\": true" && [[ "$(ls "$T/repo-kl" | wc -l)" == "$((N + 1))" ]]'
 check "API: declining does nothing"            'api -H "Authorization: Bearer $TOKEN" -d "{\"conversation\": \"c1\", \"approve\": false}" $U/api/confirm | grep -q "The person declined" && [[ "$(ls "$T/repo-kl" | wc -l)" == "$((N + 1))" ]]'

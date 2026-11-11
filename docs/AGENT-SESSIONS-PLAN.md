@@ -176,6 +176,14 @@ minified bundle. If the patch stops matching after an upgrade, the page still wo
      runs at once for a local model and asks first for a hosted one. The log view
      also gained `first_token_ms`. Granite 4.1 8B measured itself at a median 0.26 s
      to first token and 4.3 tokens per second on 4 CPU cores.
+   - **Resume can switch model** (added later). `kl resume --model <name>` and the
+     tool's `model` argument start the new agent on another gateway model; kl knows
+     each harness's flag for it (Pi: `--model kl/<name>`, Hermes: `-m <name>`), checks
+     the gateway serves it, and records it on the session. For Pi the model must also
+     be listed in its `models.json`. Run for real from the tab: a Pi commit made on
+     Granite 4.1 was resumed on Qwen 2.5. Two local models loaded at once need memory
+     for both; on a 15 GB machine they stalled each other until one was given a
+     smaller context.
    - **Resume always asks.** What the person is shown is worked out from the tool's
      arguments, not from the model's words. One request per message: in testing the
      3B model called it five times unprompted on an unrelated question, and each was

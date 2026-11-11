@@ -80,6 +80,7 @@ input:focus, textarea:focus { border-color: var(--accent); outline: none; box-sh
   border-color: var(--line);
 }
 #suggestions button:hover { border-color: var(--accent); background: var(--accent-soft); }
+#suggestions button[data-fill] { border-style: dashed; border-color: var(--accent); color: var(--accent-hover); }
 
 .turn { margin-bottom: 22px; }
 .you {
@@ -91,6 +92,7 @@ input:focus, textarea:focus { border-color: var(--accent); outline: none; box-sh
   margin-top: 8px; padding: 2px 0 2px 16px; border-left: 3px solid var(--stone-b);
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
+.answer pre.block { margin: 6px 0; padding: 8px 10px; background: var(--step); border: 1px solid var(--step-line); border-radius: 8px; white-space: pre-wrap; }
 .status { padding: 6px 0 0 16px; color: var(--muted); font-size: 13px; }
 .status::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: 8px; vertical-align: 1px; animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .25; } }

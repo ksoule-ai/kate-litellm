@@ -64,11 +64,13 @@ SEED = (f"Read {HANDOFF}. It describes the earlier session this one continues fr
 # `seed` is how `kl resume` gives the harness its opening message: "arg" appends
 # it to the command line, "keys" types it into the tmux window once the harness
 # is up. Without either, kl prints the message for you to paste.
+# `model` is how the harness is told which gateway model to use, for
+# `kl resume --model`. Pi names gateway models "kl/<name>" (see `kl setup pi`).
 HARNESSES = {
     # Reads the key and session id from models.json ("$KL_API_KEY"); see `kl setup pi`.
-    "pi": {"cmd": ["pi"], "env": ["kl"], "seed": "arg"},
+    "pi": {"cmd": ["pi"], "env": ["kl"], "seed": "arg", "model": ["--model", "kl/{model}"]},
     # Reads the endpoint and key from its config.yaml ("${KL_API_KEY}"); see `kl setup hermes`.
-    "hermes": {"cmd": ["hermes", "chat"], "env": ["kl"], "seed": "keys"},
+    "hermes": {"cmd": ["hermes", "chat"], "env": ["kl"], "seed": "keys", "model": ["-m", "{model}"]},
 }
 
 SETUP = {
@@ -169,6 +171,8 @@ def ledger() -> sqlite3.Connection:
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
     db.executescript(SCHEMA)
+    if "model" not in [r[1] for r in db.execute("PRAGMA table_info(sessions)")]:  # ledgers made before sessions recorded a model
+        db.execute("ALTER TABLE sessions ADD COLUMN model TEXT")
     return db
 
 
@@ -284,9 +288,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     sweep(db)
     db.execute(
         "INSERT INTO sessions (id, harness, cwd, repo, command, key_hash, key_alias, parent_session,"
-        " parent_commit, pid, started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        " parent_commit, pid, started_at, model) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (sid, args.harness, cwd, repo, json.dumps(command), key_hash, alias, args.parent_session,
-         args.parent_commit, os.getpid(), now()),
+         args.parent_commit, os.getpid(), now(), args.session_model),
     )
     db.commit()
     print(f"kl: session {sid} ({alias})", file=sys.stderr)
@@ -704,6 +708,13 @@ def cmd_resume(args: argparse.Namespace) -> int:
         n += 1
     text, session = handoff(db, repo, sha, branch, cwd)  # before the worktree, so a failed summary leaves nothing behind
     harness = args.harness or (session["harness"] if session else None)
+    model_args, model = [], (args.model or "").strip()
+    if model:
+        flag = HARNESSES.get(harness, {}).get("model")
+        if not flag:
+            die(f"kl does not know how to tell '{harness}' which model to use; pass its own option after the commit instead")
+        model = model[3:] if model.startswith("kl/") else model
+        model_args = [part.format(model=model) for part in flag]
     if not harness and not args.no_start:
         die("this commit has no recorded session, so say which harness to start: --harness pi")
 
@@ -725,7 +736,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
     run = [sys.executable, os.path.realpath(__file__), "run", "-C", tree, "--parent-commit", sha]
     if session:
         run += ["--parent-session", session["id"]]
-    run += [harness] + args.args + ([SEED] if seed == "arg" else [])
+    if model:
+        run += ["--session-model", model]
+    run += [harness] + model_args + args.args + ([SEED] if seed == "arg" else [])
     if args.fg or not shutil.which("tmux"):
         if seed != "arg":
             print(f"kl: start the agent off by sending it this:\n\n  {SEED}\n", file=sys.stderr)
@@ -856,6 +869,7 @@ def main() -> int:
     p.add_argument("-C", dest="dir", help="start in this directory instead of the current one")
     p.add_argument("--parent-session", help=argparse.SUPPRESS)
     p.add_argument("--parent-commit", help=argparse.SUPPRESS)
+    p.add_argument("--session-model", help=argparse.SUPPRESS)
     p.add_argument("harness", help="pi, hermes, or any command")
     p.add_argument("args", nargs=argparse.REMAINDER, help="passed to the harness")
     p.set_defaults(fn=cmd_run)
@@ -874,9 +888,10 @@ def main() -> int:
     p.set_defaults(fn=cmd_session)
 
     p = sub.add_parser("resume", help="continue from a past commit in a new worktree, with a handoff summary",
-                       epilog="Options kl does not know are passed to the harness, e.g. --model for pi.")
+                       epilog="Options kl does not know are passed to the harness.")
     p.add_argument("-C", dest="dir", help="the repo, if not the current directory")
     p.add_argument("--harness", help="harness to start (default: the one that made the commit)")
+    p.add_argument("--model", help="gateway model the new agent runs on (default: the harness's own default)")
     p.add_argument("--print", action="store_true", help="only print the handoff; create nothing")
     p.add_argument("--no-start", action="store_true", help="create the worktree and handoff, start no agent")
     p.add_argument("--fg", action="store_true", help="run the agent in this terminal instead of tmux")

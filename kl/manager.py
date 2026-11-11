@@ -169,12 +169,13 @@ class Tools:
         for s in self.db.execute(f"SELECT * FROM sessions {where} ORDER BY started_at DESC LIMIT ?", args + [min(int(limit), 40)]):
             n = self.db.execute("SELECT count(*) FROM commits WHERE session_id=?", (s["id"],)).fetchone()[0]
             parent = f"{s['parent_session'][:8] if s['parent_session'] else '?'}@{s['parent_commit'][:8]}" if s["parent_commit"] else ""
-            out.append([s["id"][:8], self.state(s), s["harness"], s["started_at"][:16], os.path.basename(s["repo"] or s["cwd"]), n, parent])
+            out.append([s["id"][:8], self.state(s), s["harness"], s["model"] or "not recorded", s["started_at"][:16],
+                        os.path.basename(s["repo"] or s["cwd"]), n, parent])
         counts: dict = {}
         for row in out:
             counts[row[2]] = counts.get(row[2], 0) + 1
         total = f"\n{len(out)} sessions listed; by harness: " + ", ".join(f"{h}={n}" for h, n in sorted(counts.items()))
-        return rows_text(out, ["session", "state", "harness", "started_utc", "repo", "commits", "resumed_from_session@commit"]) + (total if out else "")
+        return rows_text(out, ["session", "state", "harness", "model", "started_utc", "repo", "commits", "resumed_from_session@commit"]) + (total if out else "")
 
     def tool_get_session(self, session: str) -> str:
         """Details of one agent session: times, repo, its commits, how many gateway requests and tokens it used, and what the person first asked it."""
@@ -342,12 +343,14 @@ class Tools:
         more = f"\n[lines {start}-{start + len(chunk) - 1} of {len(lines)}]"
         return "\n".join(f"{start + i}: {line[:400]}" for i, line in enumerate(chunk)) + more
 
-    def tool_resume_from_commit(self, repo: str, commit: str, harness: str = "") -> str:
-        """Start a new agent session from a past commit: makes a new worktree at that commit (the person's checkout is not changed), gives the new agent a summary of the conversation up to that commit, and starts it in tmux. `harness` is pi or hermes; leave it empty to use the one that made the commit. The person is asked to confirm."""
+    def tool_resume_from_commit(self, repo: str, commit: str, harness: str = "", model: str = "") -> str:
+        """Roll back to a past commit and continue from there with a new agent: makes a new worktree at that commit (the person's checkout is not changed), gives the new agent a summary of the conversation up to that commit, and starts it in tmux. `harness` is pi or hermes; leave it empty to use the one that made the commit. `model` is the gateway model the new agent should run on, when the person names one; leave it empty otherwise. The person is asked to confirm."""
         path, sha = self.resolve_resume(repo, commit)
         cmd = [sys.executable, os.path.realpath(self.core.__file__), "resume", "-C", path]
         if harness:
             cmd += ["--harness", harness]
+        if model:
+            cmd += ["--model", model]
         p = subprocess.run(cmd + [sha], capture_output=True, text=True, timeout=900,
                            env={k: v for k, v in os.environ.items() if k != "TMUX"})
         out = (p.stderr + p.stdout).strip()
@@ -443,8 +446,16 @@ class Tools:
         """What the person is asked to confirm: worked out from the arguments, not from anything the model wrote."""
         path, sha = self.resolve_resume(args.get("repo", ""), args.get("commit", ""))
         subject = self.core.git("show", "-s", "--format=%s", sha, cwd=path)
-        harness = f"{args['harness']} session" if args.get("harness") else "agent session (same harness as made the commit)"
-        return (f"Start a new {harness} in a new worktree of {path}, at commit {sha[:10]} (\"{subject}\").\n"
+        made = self.db.execute("SELECT s.harness FROM commits c JOIN sessions s ON s.id = c.session_id WHERE c.repo=? AND c.sha=?",
+                               (path, sha)).fetchone()  # the harness kl resume will pick when none is named
+        name = args.get("harness") or (made["harness"] if made else "")
+        harness = f"{name} session" if name else "agent session"
+        model = str(args.get("model") or "").strip()
+        model = model[3:] if model.startswith("kl/") else model
+        on = ""
+        if model:
+            on = f", running on {model} ({self.where(model)} model)"  # also refuses a model the gateway does not serve
+        return (f"Start a new {harness}{on} in a new worktree of {self.core.tilde(path)}, at commit {sha[:10]} (\"{subject}\").\n"
                 "Your checkout is not changed.")
 
     ASKS = {"resume_from_commit", "benchmark_model"}  # tools that may need the person's yes

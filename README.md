@@ -76,7 +76,8 @@ kl session <id>    # one session: its commits and its gateway requests
 To go back to a commit and carry on from there with a new agent:
 
 ```sh
-kl resume <commit>              # same harness as made the commit; add e.g. --model for pi
+kl resume <commit>              # same harness as made the commit
+kl resume --model <name> <commit>   # ...on a different gateway model
 kl resume --print <commit>      # only show the handoff note
 kl resume --harness hermes <commit>
 ```
@@ -98,7 +99,9 @@ kl chat "which session made the last commit in my-repo, and what was it asked to
 
 It can list sessions and commits, read the conversation behind a commit, query the
 request log with SQL, read your repos with git, measure how fast a model is, and
-start a `kl resume` for you. It
+start a `kl resume` for you, on a different model if you name one ("go back to commit
+e1495160 in weather-cli and continue with a new agent on qwen2.5"; the tab has this
+as a fill-in example). It
 runs on a local Ollama model, as do the handoff summaries: set `KL_LOCAL_MODEL` in
 `.env` to one you have pulled that supports tools, then `make restart`. Nothing kl
 reads (conversations, logs, repo contents) is sent off this machine. Everything it can do is read-only except
